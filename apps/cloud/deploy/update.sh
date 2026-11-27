@@ -38,8 +38,10 @@ if ! flock -n 9; then
 fi
 
 BASE_URL="https://github.com/${REPO}/releases/download/${RELEASE_TAG}"
+MANIFEST_CURL_ARGS=(-sSL --connect-timeout 10 --max-time 30 --retry 2 --retry-delay 2)
 CURL_ARGS=(-fsSL --connect-timeout 10 --retry 2 --retry-delay 2)
 if [ -n "${PI_CLOUD_GITHUB_TOKEN:-}" ]; then
+  MANIFEST_CURL_ARGS+=(-H "Authorization: Bearer ${PI_CLOUD_GITHUB_TOKEN}")
   CURL_ARGS+=(-H "Authorization: Bearer ${PI_CLOUD_GITHUB_TOKEN}")
 fi
 
@@ -47,8 +49,7 @@ TMP_DIR="$(mktemp -d /tmp/pi-cloud-update.XXXXXX)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 MANIFEST_FILE="${TMP_DIR}/manifest.json"
-HTTP_CODE="$(curl -sSL --connect-timeout 10 --max-time 30 --retry 2 --retry-delay 2 \
-  ${PI_CLOUD_GITHUB_TOKEN:+-H "Authorization: Bearer ${PI_CLOUD_GITHUB_TOKEN}"} \
+HTTP_CODE="$(curl "${MANIFEST_CURL_ARGS[@]}" \
   -w '%{http_code}' -o "$MANIFEST_FILE" "${BASE_URL}/pi-cloud-manifest.json" || echo "000")"
 
 if [ "$HTTP_CODE" = "404" ]; then
@@ -167,12 +168,13 @@ echo "[pi-cloud-update] deployed ${RELEASE_ID} (prev: ${PREV_TARGET:-none})"
 
 # 清理过旧版本：按修改时间保留最近 KEEP_RELEASES 个，且绝不删除当前版本和上一回滚点
 if [ -d "$RELEASES_DIR" ] && [ "$KEEP_RELEASES" -gt 0 ]; then
+  TARGET_REAL="$(readlink -f "$TARGET_DIR")"
   mapfile -t ALL_RELEASES < <(ls -1dt "${RELEASES_DIR}"/* 2>/dev/null || true)
   COUNT=0
   for dir in "${ALL_RELEASES[@]}"; do
     [ -d "$dir" ] || continue
     REAL_DIR="$(readlink -f "$dir")"
-    if [ "$REAL_DIR" = "$TARGET_DIR" ] || [ "$REAL_DIR" = "$PREV_TARGET" ]; then
+    if [ "$REAL_DIR" = "$TARGET_REAL" ] || [ "$REAL_DIR" = "$PREV_TARGET" ]; then
       COUNT=$((COUNT + 1))
       continue
     fi

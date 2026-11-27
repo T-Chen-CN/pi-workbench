@@ -249,6 +249,30 @@ describe('云端配置轮换（F-13 / A-16）', () => {
     expect(calls.initialize).toBe(afterRollback)
     expect(runningModel()).toBe('deepseek-flash')
   })
+
+  it('OAuth token 刷新（saveCloudCredential）不改 updatedAt，不触发 AgentManager 拆毁重建（Bug 8）', async () => {
+    await pushConfig('deepseek-flash')
+    await touchEntry()
+    const beforeInit = calls.initialize
+    const beforeDispose = calls.dispose
+    const stampBefore = server.store.getCloudConfig()?.updatedAt
+
+    const refreshedCipher = encryptSecret(
+      JSON.stringify({ type: 'oauth', access: 'new-access-token', refresh: 'r1', expires: Date.now() + 3600_000 }),
+      encryptionKey
+    )
+    await server.store.saveCloudCredential('deepseek', refreshedCipher)
+
+    const afterRecord = server.store.getCloudConfig()
+    expect(afterRecord?.updatedAt).toBe(stampBefore)
+    expect(afterRecord?.credentialCipher).toBe(refreshedCipher)
+    expect(typeof afterRecord?.credentialUpdatedAt).toBe('number')
+
+    // 下一轮入口绝不能因为 OAuth 刷新去 dispose/re-initialize AgentManager
+    await touchEntry()
+    expect(calls.initialize).toBe(beforeInit)
+    expect(calls.dispose).toBe(beforeDispose)
+  })
 })
 
 describe('保存配置时探测 Key（D24）', () => {

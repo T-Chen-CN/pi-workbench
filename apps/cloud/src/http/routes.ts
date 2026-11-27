@@ -125,27 +125,18 @@ export function buildRouter(deps: RouteDeps): Router {
     if (!verifyCurrentSession(ctx)) throw new HttpError(401, 'Login required', 'unauthorized')
   }
 
-  type UserPrincipal = { kind: 'admin' } | { kind: 'device-client'; device: DeviceRecord }
-
   /**
-   * 桌面控制面使用独立 clientToken（不再接受仅限执行通道的设备 token），
-   * 并返回调用方身份，供授权 / 回收等高敏接口实施跨设备范围约束。
+   * 控制面鉴权：管理员 Cookie 与桌面端独立 `clientToken` 刻意拥有对等的控制面权限
+   *（单用户自托管模型，两者都代表同一位管理员；严格拒绝仅限执行通道的设备 `token`）。
    */
-  const requireUserPrincipal = (ctx: RequestContext): UserPrincipal => {
-    try {
-      requireSession(ctx)
-      return { kind: 'admin' }
-    } catch {
-      const header = ctx.req.headers.authorization ?? ''
-      const token = header.startsWith('Bearer ') ? header.slice(7).trim() : ''
-      const device = token ? deps.store.findDeviceByClientToken(token) : undefined
-      if (!device) throw new HttpError(401, 'Unauthorized', 'unauthorized')
-      return { kind: 'device-client', device }
-    }
-  }
-
   const requireUser = (ctx: RequestContext): void => {
-    requireUserPrincipal(ctx)
+    const header = ctx.req.headers.authorization ?? ''
+    const token = header.startsWith('Bearer ') ? header.slice(7).trim() : ''
+    if (token) {
+      const device = deps.store.findDeviceByClientToken(token)
+      if (device) return
+    }
+    requireSession(ctx)
   }
 
   const requireDevice = (ctx: RequestContext): DeviceRecord => {

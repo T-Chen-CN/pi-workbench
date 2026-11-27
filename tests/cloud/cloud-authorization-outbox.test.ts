@@ -129,6 +129,19 @@ describe('BoundedLog（outbox）', () => {
     expect(log.since(0).frames).toHaveLength(1)
   })
 
+  it('dropTask 造成 seq 空洞不会误判 overflow（Bug 6）', () => {
+    const log = new BoundedLog(10, 60_000, () => 0)
+    const seq1 = log.append({ type: 'task' }, 'T-1')
+    log.append({ type: 'task_message' }, 'T-2')
+    const seq3 = log.append({ type: 'task' }, 'T-3')
+    // T-2 结单被 dropTask 删掉 seq=2；seq=1 已 ack，设备带 lastAckSeq=1 续读不应误报 overflow
+    log.dropTask('T-1')
+    log.dropTask('T-2')
+    const res = log.since(seq1)
+    expect(res.overflow).toBe(false)
+    expect(res.frames.map((frame) => frame.seq)).toEqual([seq3])
+  })
+
   it('appendWith 让帧自带 seq（设备通道重放时不能再包一层）', () => {
     const log = new BoundedLog(10, 60_000, () => 0)
     const { seq, frame } = log.appendWith((next) => ({ type: 'task', seq: next }), 'T-1')

@@ -88,6 +88,8 @@ export class DeviceAgent {
   private reconnectTimer: NodeJS.Timeout | null = null
   private reconnectDelay = RECONNECT_MIN_MS
   private outbox: OutgoingDeviceFrame[] = []
+  /** 在途异步 ws.send 回调 Promise 集合，退出 flush 时必须等待它们真正刷出内核缓冲 */
+  private pendingSends = new Set<Promise<void>>()
   private lastAckSeq = 0
   private handshaking = false
   private stopped = false
@@ -172,10 +174,26 @@ export class DeviceAgent {
     return { ...this.state, pending: this.outbox.length }
   }
 
-  /** 启动：读回凭据 → 恢复上次未完成工单 → 连接 */
+  /** 启动：先清理旧连接/定时器 → 读回凭据 → 恢复上次未完成工单 → 连接 */
   async start(): Promise<void> {
     this.stopped = false
     this.durableStop = false
+    this.clearTimers()
+    this.closeCurrentSocket()
+    this.reconnectDelay = RECONNECT_MIN_MS
+
+    const nextLink = readCloudLink()
+    // 切换云端或重新配对为新设备时，清空旧连接的未发队列与游标，避免串发给新云端
+    if (
+      this.link &&
+      (!nextLink ||
+        this.link.deviceId !== nextLink.deviceId ||
+        this.link.baseUrl !== nextLink.baseUrl)
+    ) {
+      this.outbox = []
+      this.lastAckSeq = 0
+    }
+
     await this.runner.load()
     await this.runner.recoverInterrupted()
     // A-43 兜底：上报本地台账里每个单元的工作树状态（干净且已收敛的会被云端自动回收）
@@ -198,8 +216,7 @@ export class DeviceAgent {
   async stop(): Promise<void> {
     this.stopped = true
     this.clearTimers()
-    this.socket?.close()
-    this.socket = null
+    this.closeCurrentSocket()
     await this.runner.dispose()
   }
 
@@ -207,8 +224,7 @@ export class DeviceAgent {
   async unlink(): Promise<void> {
     this.durableStop = true
     this.clearTimers()
-    this.socket?.close()
-    this.socket = null
+    this.closeCurrentSocket()
     this.link = null
     this.token = ''
     this.outbox = []
@@ -222,8 +238,7 @@ export class DeviceAgent {
     this.stopped = false
     this.durableStop = false
     this.clearTimers()
-    this.socket?.close()
-    this.socket = null
+    this.closeCurrentSocket()
     this.link = readCloudLink()
     if (!this.link) {
       this.updateState({ status: 'unlinked' })
@@ -245,17 +260,81 @@ export class DeviceAgent {
     this.send({ type: 'workspaces', workspaces })
   }
 
-  /** 用户点了「停止工单」之外的中断：app 退出前把在跑的工单标 interrupted */
+  /** 用户点了「停止工单」之外的中断：app 退出前把在跑的工单标 interrupted 并等待实际 flush */
   async interruptRunning(): Promise<void> {
-    for (const taskId of [...this.running]) {
-      this.send({ type: 'task_interrupted', taskId, reason: 'app-quit', at: Date.now() })
-    }
+    const taskIds = [...this.running]
     this.running.clear()
-    // 尽量把队列冲出去；shutdown 有超时，最多等 1.5s
-    await this.flush(1_500)
+    const confirmed = new Set<string>()
+    const sendWaiters: Promise<void>[] = []
+    const socket = this.socket
+    const canSendNow = Boolean(
+      socket && socket.readyState === WebSocket.OPEN && !this.handshaking
+    )
+
+    for (const taskId of taskIds) {
+      const frame: OutgoingDeviceFrame = {
+        type: 'task_interrupted',
+        taskId,
+        reason: 'app-quit',
+        at: Date.now(),
+      }
+      if (canSendNow && socket) {
+        const payload = JSON.stringify({ v: CLOUD_PROTOCOL_VERSION, ...frame })
+        let resolveSend!: () => void
+        const p = new Promise<void>((resolve) => {
+          resolveSend = resolve
+        })
+        try {
+          this.pendingSends.add(p)
+          sendWaiters.push(p)
+          socket.send(payload, (error) => {
+            this.pendingSends.delete(p)
+            if (error) {
+              this.enqueueOutbox(frame)
+            } else {
+              confirmed.add(taskId)
+            }
+            resolveSend()
+          })
+          continue
+        } catch {
+          this.pendingSends.delete(p)
+          resolveSend()
+        }
+      }
+      this.enqueueOutbox(frame)
+    }
+
+    // 尽量把本次中断帧及此前已入队/在途的帧全部刷出内核缓冲；shutdown 有超时，最多等 1.5s
+    await Promise.race([
+      Promise.all([...sendWaiters, this.flush(1_500)]),
+      new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 1_500)
+        timer.unref?.()
+      }),
+    ])
+
+    // 仅清除确认已刷出给云端的持久化运行记录，避免下次启动二次上报；离线未送达的保留供下次启动补报
+    if (confirmed.size > 0) {
+      await this.runner.clearPersistedTasks([...confirmed]).catch((error) =>
+        this.deps.logger.warn('[Cloud Device] failed to clear persisted tasks on quit:', error)
+      )
+    }
   }
 
   // ------------------------------------------------------------------ 通道
+
+  private closeCurrentSocket(): void {
+    const previous = this.socket
+    this.socket = null
+    this.handshaking = false
+    if (!previous) return
+    try {
+      previous.close()
+    } catch {
+      // ignore
+    }
+  }
 
   private async connect(): Promise<void> {
     if (this.stopped || this.durableStop || !this.link || !this.token) return
@@ -265,6 +344,8 @@ export class DeviceAgent {
       ? await resolveWebSocketProxyAgent(url).catch(() => undefined)
       : undefined
     if (this.stopped || this.durableStop || !this.link || !this.token) return
+    // await 代理探测后再次清理旧 socket，杜绝并发 connect/start 泄漏旧连接
+    this.closeCurrentSocket()
     let socket: WebSocket
     try {
       socket = new WebSocket(url, {
@@ -279,16 +360,17 @@ export class DeviceAgent {
     this.handshaking = true
 
     socket.on('open', () => {
+      if (this.socket !== socket) return
       void this.onOpen(socket)
     })
     socket.on('message', (raw) => {
+      if (this.socket !== socket) return
       this.onMessage(raw)
     })
     socket.on('close', (code) => {
-      if (this.socket === socket) {
-        this.socket = null
-        this.handshaking = false
-      }
+      if (this.socket !== socket) return
+      this.socket = null
+      this.handshaking = false
       this.stopHeartbeat()
       if (this.stopped || this.durableStop) return
       if (code === 1008 || code === 4401) {
@@ -307,10 +389,9 @@ export class DeviceAgent {
       } catch {
         // 清理失败不影响结论
       }
-      if (this.socket === socket) {
-        this.socket = null
-        this.handshaking = false
-      }
+      if (this.socket !== socket) return
+      this.socket = null
+      this.handshaking = false
       this.stopHeartbeat()
       if (this.stopped || this.durableStop) return
       if (status === 401 || status === 403) {
@@ -321,6 +402,7 @@ export class DeviceAgent {
       this.scheduleReconnect(new Error(`handshake rejected with ${status}`))
     })
     socket.on('error', (error) => {
+      if (this.socket !== socket) return
       this.deps.logger.warn('[Cloud Device] socket error:', error)
     })
   }
@@ -416,45 +498,65 @@ export class DeviceAgent {
     this.reconnectTimer = null
   }
 
-  private send(frame: OutgoingDeviceFrame): void {
-    const socket = this.socket
-    if (socket && socket.readyState === WebSocket.OPEN && !this.handshaking) {
-      try {
-        socket.send(JSON.stringify({ v: CLOUD_PROTOCOL_VERSION, ...frame }))
-        return
-      } catch (error) {
-        this.deps.logger.warn('[Cloud Device] send failed, queueing:', error)
-      }
-    }
+  private enqueueOutbox(frame: OutgoingDeviceFrame): void {
     // 离线：有界队列，丢最旧的（进度帧本来就可丢，终态帧重连后还能再发）
     this.outbox.push(frame)
     if (this.outbox.length > OUTBOX_LIMIT) this.outbox.splice(0, this.outbox.length - OUTBOX_LIMIT)
     this.updateState({})
   }
 
+  private send(frame: OutgoingDeviceFrame): void {
+    const socket = this.socket
+    if (socket && socket.readyState === WebSocket.OPEN && !this.handshaking) {
+      const payload = JSON.stringify({ v: CLOUD_PROTOCOL_VERSION, ...frame })
+      let resolveSend!: () => void
+      const p = new Promise<void>((resolve) => {
+        resolveSend = resolve
+      })
+      try {
+        this.pendingSends.add(p)
+        socket.send(payload, (error) => {
+          this.pendingSends.delete(p)
+          if (error) {
+            this.deps.logger.warn('[Cloud Device] async send failed, queueing:', error)
+            this.enqueueOutbox(frame)
+          }
+          resolveSend()
+        })
+        return
+      } catch (error) {
+        this.pendingSends.delete(p)
+        resolveSend()
+        this.deps.logger.warn('[Cloud Device] send failed, queueing:', error)
+      }
+    }
+    this.enqueueOutbox(frame)
+  }
+
   private async flush(timeoutMs: number): Promise<void> {
     const socket = this.socket
-    if (!socket || socket.readyState !== WebSocket.OPEN) return
-    const pending = this.outbox
-    this.outbox = []
-    const sendPromises: Promise<void>[] = []
-    for (let i = 0; i < pending.length; i += 1) {
-      const frame = pending[i]
-      try {
-        const payload = JSON.stringify({ v: CLOUD_PROTOCOL_VERSION, ...frame })
-        if (timeoutMs > 0) {
-          sendPromises.push(
-            new Promise<void>((resolve) => {
-              socket.send(payload, () => resolve())
-            })
-          )
-        } else {
-          socket.send(payload)
+    const sendPromises: Promise<void>[] = timeoutMs > 0 ? [...this.pendingSends] : []
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      const pending = this.outbox
+      this.outbox = []
+      for (let i = 0; i < pending.length; i += 1) {
+        const frame = pending[i]
+        try {
+          const payload = JSON.stringify({ v: CLOUD_PROTOCOL_VERSION, ...frame })
+          if (timeoutMs > 0) {
+            sendPromises.push(
+              new Promise<void>((resolve) => {
+                socket.send(payload, () => resolve())
+              })
+            )
+          } else {
+            socket.send(payload)
+          }
+        } catch {
+          // 第 i 帧发送失败时必须把剩余未发帧全部放回队列，不能丢弃 i+1..n
+          this.outbox.unshift(...pending.slice(i))
+          break
         }
-      } catch {
-        // 第 i 帧发送失败时必须把剩余未发帧全部放回队列，不能丢弃 i+1..n
-        this.outbox.unshift(...pending.slice(i))
-        break
       }
     }
     if (timeoutMs > 0 && sendPromises.length > 0) {
@@ -492,51 +594,107 @@ export class DeviceAgent {
       }
     }
 
-    switch (frame.type) {
-      case 'ack':
-        if (typeof frame.seq === 'number') {
-          // 服务端下发 ack(seq: 0) 表示重启或日志溢出后的游标重置，必须清零避免后续重连永远传旧高位游标导致丢帧
-          if (frame.seq === 0) this.lastAckSeq = 0
-          else if (frame.seq > this.lastAckSeq) this.lastAckSeq = frame.seq
+    try {
+      switch (frame.type) {
+        case 'ack':
+          if (typeof frame.seq === 'number') {
+            // 服务端下发 ack(seq: 0) 表示重启或日志溢出后的游标重置，必须清零避免后续重连永远传旧高位游标导致丢帧
+            if (frame.seq === 0) this.lastAckSeq = 0
+            else if (frame.seq > this.lastAckSeq) this.lastAckSeq = frame.seq
+          }
+          return
+        case 'task': {
+          const task = (frame as { task?: unknown }).task as
+            | { id?: unknown; spec?: { workUnitId?: unknown; repo?: { workspacePath?: unknown } } }
+            | undefined
+          if (
+            !task ||
+            typeof task !== 'object' ||
+            typeof task.id !== 'string' ||
+            !task.id.trim() ||
+            !task.spec ||
+            typeof task.spec !== 'object' ||
+            typeof task.spec.workUnitId !== 'string' ||
+            !task.spec.repo ||
+            typeof task.spec.repo !== 'object' ||
+            typeof task.spec.repo.workspacePath !== 'string'
+          ) {
+            this.deps.logger.warn('[Cloud Device] dropped malformed task frame')
+            return
+          }
+          ackIfSequenced()
+          this.running.add(task.id)
+          void this.runner.start(task.id, task.spec as CloudTaskSpec)
+          return
         }
-        return
-      case 'task':
-        ackIfSequenced()
-        this.running.add(frame.task.id)
-        void this.runner.start(frame.task.id, frame.task.spec as CloudTaskSpec)
-        return
-      case 'task_cancel':
-        ackIfSequenced()
-        this.running.delete(frame.taskId)
-        void this.runner.cancel(frame.taskId, frame.reason)
-        return
-      case 'task_answer':
-        ackIfSequenced()
-        void this.runner.answer(frame.taskId, frame.text, frame.questionId)
-        return
-      case 'task_message':
-        ackIfSequenced()
-        void this.runner.message(frame.taskId, frame.text)
-        return
-      case 'close_unit':
-        ackIfSequenced()
-        // F-19a：回收工作单元（先判干净再删，脏树保留）
-        void this.runner.closeUnit(frame.unitId).catch((error) =>
-          this.deps.logger.error('[Cloud Device] close unit failed:', error)
-        )
-        return
-      case 'pong':
-        return
-      case 'error':
-        this.deps.logger.warn(`[Cloud Device] server error ${frame.code}: ${frame.message}`)
-        if (frame.fatal) {
-          this.updateState({ status: 'error', lastError: frame.message })
-          this.durableStop = true
-          this.socket?.close()
+        case 'task_cancel': {
+          if (typeof frame.taskId !== 'string' || !frame.taskId.trim()) {
+            this.deps.logger.warn('[Cloud Device] dropped malformed task_cancel frame')
+            return
+          }
+          ackIfSequenced()
+          this.running.delete(frame.taskId)
+          const reason = typeof frame.reason === 'string' ? frame.reason : undefined
+          void this.runner.cancel(frame.taskId, reason)
+          return
         }
-        return
-      default:
-        return
+        case 'task_answer': {
+          if (
+            typeof frame.taskId !== 'string' ||
+            !frame.taskId.trim() ||
+            typeof frame.text !== 'string'
+          ) {
+            this.deps.logger.warn('[Cloud Device] dropped malformed task_answer frame')
+            return
+          }
+          ackIfSequenced()
+          const questionId = typeof frame.questionId === 'string' ? frame.questionId : undefined
+          void this.runner.answer(frame.taskId, frame.text, questionId)
+          return
+        }
+        case 'task_message': {
+          if (
+            typeof frame.taskId !== 'string' ||
+            !frame.taskId.trim() ||
+            typeof frame.text !== 'string'
+          ) {
+            this.deps.logger.warn('[Cloud Device] dropped malformed task_message frame')
+            return
+          }
+          ackIfSequenced()
+          void this.runner.message(frame.taskId, frame.text)
+          return
+        }
+        case 'close_unit': {
+          if (typeof frame.unitId !== 'string' || !frame.unitId.trim()) {
+            this.deps.logger.warn('[Cloud Device] dropped malformed close_unit frame')
+            return
+          }
+          ackIfSequenced()
+          // F-19a：回收工作单元（先判干净再删，脏树保留）
+          void this.runner.closeUnit(frame.unitId).catch((error) =>
+            this.deps.logger.error('[Cloud Device] close unit failed:', error)
+          )
+          return
+        }
+        case 'pong':
+          return
+        case 'error': {
+          const code = String((frame as { code?: unknown }).code ?? 'unknown')
+          const message = String((frame as { message?: unknown }).message ?? '')
+          this.deps.logger.warn(`[Cloud Device] server error ${code}: ${message}`)
+          if ((frame as { fatal?: unknown }).fatal === true) {
+            this.updateState({ status: 'error', lastError: message })
+            this.durableStop = true
+            this.closeCurrentSocket()
+          }
+          return
+        }
+        default:
+          return
+      }
+    } catch (error) {
+      this.deps.logger.warn('[Cloud Device] failed to process server frame:', error)
     }
   }
 

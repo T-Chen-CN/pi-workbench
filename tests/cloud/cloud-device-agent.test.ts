@@ -298,3 +298,90 @@ describe('离线队列', () => {
     await agent.stop()
   })
 })
+
+describe('健壮性与退出刷盘（Bug 12a / 12b / 12c）', () => {
+  it('重复调用 start() 重新配对会关闭旧 socket 并忽略旧 socket 的晚到事件（Bug 12a）', async () => {
+    const { agent } = makeAgent()
+    await agent.start()
+    await waitFor(() => frame('hello'), 'first hello')
+    const firstSocket = sockets[sockets.length - 1]!
+
+    received = []
+    await agent.start()
+    await waitFor(() => frame('hello'), 'second hello')
+    const secondSocket = sockets[sockets.length - 1]!
+    expect(secondSocket).not.toBe(firstSocket)
+
+    // 旧连接关闭（即使是 4401）绝不能把新连接标成 revoked 或 offline
+    firstSocket.close(4401, 'old revoked')
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    expect(agent.getState().status).toBe('online')
+    expect(agent.getState().revoked).toBeFalsy()
+    await agent.stop()
+  })
+
+  it('收到缺字段的畸形服务端帧记录告警且不崩溃（Bug 12b）', async () => {
+    const { agent } = makeAgent()
+    await agent.start()
+    await waitFor(() => frame('hello'), 'hello')
+    const socket = sockets[sockets.length - 1]!
+
+    // 缺失 task / task.id / task.spec / unitId / text 等字段
+    for (const bad of [
+      { v: CLOUD_PROTOCOL_VERSION, type: 'task', seq: 1 },
+      { v: CLOUD_PROTOCOL_VERSION, type: 'task', seq: 2, task: { id: 'T-bad' } },
+      { v: CLOUD_PROTOCOL_VERSION, type: 'task_cancel', seq: 3 },
+      { v: CLOUD_PROTOCOL_VERSION, type: 'task_answer', seq: 4, taskId: 'T-1' },
+      { v: CLOUD_PROTOCOL_VERSION, type: 'task_message', seq: 5, taskId: 'T-1' },
+      { v: CLOUD_PROTOCOL_VERSION, type: 'close_unit', seq: 6 },
+    ]) {
+      socket.send(JSON.stringify(bad))
+    }
+
+    // 确认通道仍正常存活
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    expect(agent.getState().status).toBe('online')
+    await agent.refreshWorkspaces()
+    await waitFor(() => frame('workspaces'), 'still alive after malformed frames')
+    await agent.stop()
+  })
+
+  it('interruptRunning 等待 ws.send 刷出并清理已持久化运行记录，下次启动不重复上报（Bug 12c）', async () => {
+    const dataDir = path.join(tmpRoot, 'cloud-quit-flush')
+    await fs.mkdir(dataDir, { recursive: true })
+    const { agent } = makeAgent({ dataDir })
+    await agent.start()
+    await waitFor(() => frame('hello'), 'hello')
+
+    // 模拟一张正在运行且已落盘的工单
+    ;(agent as any).running.add('T-quit-1')
+    ;(agent as any).runner.persistedTasks.set('T-quit-1', {
+      id: 'T-quit-1',
+      unitId: 'u-quit',
+      repoPath: path.join(tmpRoot, 'repo'),
+      worktreePath: path.join(tmpRoot, 'repo'),
+      status: 'running',
+      startedAt: Date.now(),
+    })
+    await (agent as any).runner.persistTasks()
+
+    received = []
+    await agent.interruptRunning()
+    await agent.stop()
+
+    const interrupted = await waitFor(
+      () => received.find((item) => item.type === 'task_interrupted' && item.taskId === 'T-quit-1'),
+      'task_interrupted flushed on quit'
+    )
+    expect(interrupted.reason).toBe('app-quit')
+
+    // 重启后 tasks.json 已清空，不会再二次上报 task_interrupted
+    received = []
+    const { agent: agent2 } = makeAgent({ dataDir })
+    await agent2.start()
+    await waitFor(() => frame('hello'), 'second boot hello')
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    expect(received.filter((item) => item.type === 'task_interrupted')).toHaveLength(0)
+    await agent2.stop()
+  })
+})

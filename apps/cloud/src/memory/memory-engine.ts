@@ -281,8 +281,15 @@ export async function runDreamConsolidation(
     return null
   }
 
-  // 分批整理（每批最多 50 条）并提升 maxTokens 上限，避免 200 条全部塞进 1024 token 输出被截断
-  const batch = autoItems.slice(0, 50)
+  // 分批整理（每批最多 50 条）：优先尚未合并的 auto 条目，再按最久未更新（updatedAt 升序）挑批，
+  // 避免刚生成的 dream 条目（updatedAt = now）持续占满前 50 槽位而饿死更早的自动记忆
+  const prioritized = [...autoItems].sort((a, b) => {
+    const aIsDream = a.source === 'dream' ? 1 : 0
+    const bIsDream = b.source === 'dream' ? 1 : 0
+    if (aIsDream !== bIsDream) return aIsDream - bIsDream
+    return a.updatedAt - b.updatedAt
+  })
+  const batch = prioritized.slice(0, 50)
   const eligibleIds = new Set(batch.map((m) => m.id))
 
   const userPrompt = [

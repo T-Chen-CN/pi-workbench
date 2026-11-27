@@ -30,6 +30,8 @@ export interface CloudConfig {
   webDir: string
   /** 可选：首次初始化 `/v1/setup` 所需的启动令牌，公网部署建议设置防抢注 */
   setupToken?: string
+  /** 干净工作树自动回收的空闲延迟（毫秒，默认 10 分钟，由 PI_CLOUD_WORKTREE_RECLAIM_DELAY_MS 控制） */
+  worktreeReclaimDelayMs?: number
 }
 
 function required(name: string): string {
@@ -49,6 +51,14 @@ function decodeKey(raw: string): Buffer {
 export function loadConfig(overrides: Partial<CloudConfig> = {}): CloudConfig {
   const dataDir = overrides.dataDir || process.env.PI_CLOUD_DATA_DIR || '/var/lib/pi-cloud'
   const envSetupToken = process.env.PI_CLOUD_SETUP_TOKEN?.trim()
+  const rawReclaimDelay = process.env.PI_CLOUD_WORKTREE_RECLAIM_DELAY_MS
+  const envReclaimDelay =
+    rawReclaimDelay !== undefined && rawReclaimDelay.trim() !== ''
+      ? Number(rawReclaimDelay)
+      : undefined
+  if (envReclaimDelay !== undefined && (!Number.isFinite(envReclaimDelay) || envReclaimDelay < 0)) {
+    throw new Error(`Invalid PI_CLOUD_WORKTREE_RECLAIM_DELAY_MS: ${rawReclaimDelay}`)
+  }
   const config: CloudConfig = {
     domain: process.env.PI_CLOUD_DOMAIN || 'cloud.example.com',
     host: process.env.PI_CLOUD_HOST || '127.0.0.1',
@@ -63,10 +73,17 @@ export function loadConfig(overrides: Partial<CloudConfig> = {}): CloudConfig {
     version: process.env.PI_CLOUD_VERSION || '0.1.0',
     webDir: process.env.PI_CLOUD_WEB_DIR || '',
     ...(envSetupToken ? { setupToken: envSetupToken } : {}),
+    ...(envReclaimDelay !== undefined ? { worktreeReclaimDelayMs: envReclaimDelay } : {}),
     ...overrides,
   }
   if (!Number.isFinite(config.port) || config.port < 0) {
     throw new Error(`Invalid PI_CLOUD_PORT: ${process.env.PI_CLOUD_PORT}`)
+  }
+  if (
+    config.worktreeReclaimDelayMs !== undefined &&
+    (!Number.isFinite(config.worktreeReclaimDelayMs) || config.worktreeReclaimDelayMs < 0)
+  ) {
+    throw new Error(`Invalid worktreeReclaimDelayMs: ${String(config.worktreeReclaimDelayMs)}`)
   }
   return config
 }

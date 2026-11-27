@@ -194,3 +194,72 @@ describe('首包顺序：快照不能被事件抢在前面', () => {
     expect(socket.sent[1]?.event?.text).toBe('config-applied')
   })
 })
+
+describe('心跳超时判定（Bug 3：60s 静默窗口不被 25s tick 误杀）', () => {
+  it('单次延迟 pong 在 25s 与 50s tick 都存活，静默超过 60s 才断开', () => {
+    let now = 0
+    let terminated = false
+    let pings = 0
+    let offlineDevice: string | null = null
+    const listeners = new Map<string, (...args: unknown[]) => void>()
+    const socket = {
+      readyState: 1,
+      send() {},
+      on(event: string, fn: (...args: unknown[]) => void) {
+        listeners.set(event, fn)
+      },
+      close() {},
+      terminate() {
+        terminated = true
+      },
+      ping() {
+        pings += 1
+      },
+    }
+
+    const hub = new Hub(
+      {
+        onClientFrame: () => undefined,
+        onDeviceFrame: () => undefined,
+        onDeviceOnline: () => undefined,
+        onDeviceOffline: (id) => {
+          offlineDevice = id
+        },
+        onClientHello: () => undefined,
+        buildSnapshot: async () => ({} as any),
+        logger: { warn: () => undefined, info: () => undefined },
+      },
+      () => now
+    )
+    hub.addDevice(socket as unknown as WebSocket, 'dev-hb', null)
+
+    // 25s tick：发 ping，不断开
+    now = 25_000
+    ;(hub as any).tick()
+    expect(pings).toBe(1)
+    expect(terminated).toBe(false)
+    expect(hub.isDeviceOnline('dev-hb')).toBe(true)
+
+    // 50s tick（仍 <= 60s，哪怕上一个 pong 还没到）：继续发 ping，不断开
+    now = 50_000
+    ;(hub as any).tick()
+    expect(pings).toBe(2)
+    expect(terminated).toBe(false)
+    expect(hub.isDeviceOnline('dev-hb')).toBe(true)
+
+    // 55s 收到迟到的 pong → 刷新 lastSeenAt，75s tick 依旧存活
+    now = 55_000
+    listeners.get('pong')?.()
+    now = 75_000
+    ;(hub as any).tick()
+    expect(terminated).toBe(false)
+    expect(hub.isDeviceOnline('dev-hb')).toBe(true)
+
+    // 超过 60s 静默（55_000 + 61_000 = 116_000）才真正判定离线并终止连接
+    now = 116_000
+    ;(hub as any).tick()
+    expect(terminated).toBe(true)
+    expect(hub.isDeviceOnline('dev-hb')).toBe(false)
+    expect(offlineDevice).toBe('dev-hb')
+  })
+})

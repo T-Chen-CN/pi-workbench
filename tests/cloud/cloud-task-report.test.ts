@@ -16,6 +16,7 @@ import {
   sanitizeDiffExcerpt,
   scanDiffForSecrets,
   scanWorktreeSecrets,
+  sliceUtf8ByBytes,
 } from '../../electron/cloud/task-report'
 import { createCloudToolsExtension } from '../../apps/cloud/src/agent/tools'
 import { CloudStore } from '../../apps/cloud/src/store/store'
@@ -98,6 +99,29 @@ describe('scanDiffForSecrets / scanWorktreeSecrets（F-36 / A-29）', () => {
     expect(event.content).not.toContain(fakeGh)
   })
 
+  it('扫描 JSON 引号键、Pi Cloud pk_ token 与 aws_secret_access_key（Bug 10a）', () => {
+    const fakePiToken = ['pk_', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcd'].join('')
+    const fakeAwsSecret = ['wJalrXUtnFEMI/K7MDENG/bPxRfiCY', 'REALKEY123'].join('')
+    const fakeJsonKey = ['superSecretProdApiKey', '9876543210'].join('')
+    const diff = [
+      'diff --git a/config.json b/config.json',
+      '--- a/config.json',
+      '+++ b/config.json',
+      '@@ -1,0 +1,4 @@',
+      `+  "api_key": "${fakeJsonKey}",`,
+      `+  "token": "${fakePiToken}",`,
+      `+  "aws_secret_access_key": "${fakeAwsSecret}",`,
+      '+  "password": "example_placeholder_value_123456"',
+    ].join('\n')
+
+    const hits = scanDiffForSecrets(diff)
+    expect(hits).toEqual([
+      { path: 'config.json', line: 1, kind: 'secret-assignment' },
+      { path: 'config.json', line: 2, kind: 'pi-cloud-token' },
+      { path: 'config.json', line: 3, kind: 'aws-secret-key' },
+    ])
+  })
+
   it('真实 git 工作树：同时扫到已提交 diff 与未跟踪新文件里的密钥', async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-secret-scan-'))
     const git = (args: string[]) => execFileAsync('git', ['-C', tmp, ...args])
@@ -173,7 +197,41 @@ describe('C-03b：脱敏 diff 采集与云端 get_task 按需拉取', () => {
     expect(clipped?.truncated).toBe(true)
     expect(clipped?.excerpt).toContain('[truncated, total')
     expect(Buffer.byteLength(clipped?.excerpt ?? '', 'utf8')).toBeLessThanOrEqual(512)
+
+    // Bug 10c：中文多字节行按字节截断绝不能产生 \uFFFD 替换字符
+    const chineseLine = `+${'中文测试字符'.repeat(200)}`
+    const clippedZh = sanitizeDiffExcerpt(chineseLine, 512)
+    expect(clippedZh?.truncated).toBe(true)
+    expect(clippedZh?.excerpt).not.toContain('\uFFFD')
+    expect(Buffer.byteLength(clippedZh?.excerpt ?? '', 'utf8')).toBeLessThanOrEqual(512)
+    for (let limit = 0; limit <= 12; limit += 1) {
+      const sliced = sliceUtf8ByBytes('中文😀abc', limit)
+      expect(sliced).not.toContain('\uFFFD')
+      expect(Buffer.byteLength(sliced, 'utf8')).toBeLessThanOrEqual(limit)
+    }
   })
+
+  it('base 未传时 collectTaskDiff 只采集一次 git diff HEAD，不重复拼接未暂存 diff（Bug 10b）', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-diff-nodup-'))
+    const git = (args: string[]) => execFileAsync('git', ['-C', tmp, ...args])
+    try {
+      await git(['init', '-b', 'main'])
+      await git(['config', 'user.email', 'test@example.com'])
+      await git(['config', 'user.name', 'Test'])
+      await fs.writeFile(path.join(tmp, 'a.ts'), 'export const a = 1\n')
+      await git(['add', '.'])
+      await git(['commit', '-m', 'init'])
+
+      // 未暂存改动：git diff HEAD 与 git diff 都会看到它，但结果只能出现一次
+      await fs.writeFile(path.join(tmp, 'a.ts'), 'export const a = 2\n')
+      const diff = await collectTaskDiff(undefined, tmp, 8192)
+      expect(diff).toBeDefined()
+      const matches = diff!.excerpt.match(/diff --git a\/a\.ts b\/a\.ts/g) ?? []
+      expect(matches).toHaveLength(1)
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true }).catch(() => undefined)
+    }
+  }, 20_000)
 
   it('collectTaskDiff 在真实 git 工作树里同时采集已提交与未跟踪文件并排除 .env', async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-diff-collect-'))

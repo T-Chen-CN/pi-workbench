@@ -12,12 +12,12 @@
  */
 
 import { execFile } from 'node:child_process'
-import * as fs from 'node:fs'
 import * as fsp from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { promisify } from 'node:util'
 import type { ExtensionFactory } from '@earendil-works/pi-coding-agent'
+import { canonicalizePath, isPathInsideRoot, normalizeForComparison } from '../path-safety.js'
 import { sanitizeTerminalEnv } from '../terminal-manager.js'
 
 const execFileAsync = promisify(execFile)
@@ -51,55 +51,16 @@ export interface TaskGuardContext {
   onBlocked?: (info: TaskGuardInfo) => void
 }
 
-/** 规范化真实路径（含悬挂符号链接解析，阻断工作树外逃逸） */
-function canonicalize(targetPath: string): string {
-  let current = path.resolve(targetPath)
-  const missing: string[] = []
-  let symlinkHops = 0
-  for (let depth = 0; depth < 64; depth += 1) {
-    try {
-      const resolved = fs.realpathSync.native(current)
-      return missing.length > 0 ? path.join(resolved, ...missing.reverse()) : resolved
-    } catch {
-      try {
-        const stat = fs.lstatSync(current)
-        if (stat.isSymbolicLink()) {
-          symlinkHops += 1
-          if (symlinkHops > 20) return path.resolve(targetPath)
-          const linkTarget = fs.readlinkSync(current)
-          current = path.resolve(path.dirname(current), linkTarget)
-          continue
-        }
-      } catch {
-        // 确实不存在：继续向父目录回退
-      }
-      const parent = path.dirname(current)
-      if (parent === current) return path.resolve(targetPath)
-      missing.push(path.basename(current))
-      current = parent
-    }
-  }
-  return path.resolve(targetPath)
-}
-
 function isInside(root: string, target: string): boolean {
-  const relative = path.relative(root, target)
-  if (relative === '') return true
-  if (relative.startsWith('..')) return false
-  if (path.isAbsolute(relative)) return false
-  return true
-}
-
-function normalizeForCompare(root: string, target: string): { root: string; target: string } {
-  if (process.platform !== 'win32') return { root, target }
-  return { root: root.toLowerCase(), target: target.toLowerCase() }
+  return isPathInsideRoot(root, target)
 }
 
 /**
  * 解析工具参数里的路径，与 Pi SDK `resolveToCwd` 对齐：
- * 剥离前导 `@`、归一化 Unicode 空格、展开 `~` / `~/`，再按 cwd 解析并 canonicalize。
+ * 剥离前导 `@`、归一化 Unicode 空格、展开 `~` / `~/`，再按 cwd 解析并经 fail-closed `canonicalizePath` 规范化。
+ * 遇到符号链接循环或超深路径时返回 `null`（绝不 fail-open 回落到未解析的 `path.resolve`）。
  */
-function resolveToolPath(cwd: string, input: string): string {
+function resolveToolPath(cwd: string, input: string): string | null {
   let normalized = input.replace(UNICODE_SPACES, ' ')
   if (normalized.startsWith('@')) normalized = normalized.slice(1)
   if (normalized === '~') {
@@ -108,7 +69,7 @@ function resolveToolPath(cwd: string, input: string): string {
     normalized = path.join(os.homedir(), normalized.slice(2))
   }
   const resolved = path.isAbsolute(normalized) ? path.resolve(normalized) : path.resolve(cwd, normalized)
-  return canonicalize(resolved)
+  return canonicalizePath(resolved)
 }
 
 /** 取出该次调用涉及的写入路径（不同工具参数名不一致） */
@@ -141,18 +102,18 @@ function tokenizeShellArgs(args: string): string[] {
 /** 从 rm / del / rmdir / Remove-Item 段里取出目标路径；返回越界的那一个（有则拒绝） */
 function escapingRmTarget(cwd: string, root: string, command: string): string | null {
   const flat = flattenCommand(command)
-  const canonicalRoot = canonicalize(root)
+  const canonicalRoot = canonicalizePath(root)
   // 若命令前段含 cd/Set-Location 切目录，跟踪有效工作目录避免 `cd .. && rm -rf dir` 绕过
-  let effectiveCwd = canonicalize(cwd)
+  let effectiveCwd: string | null = canonicalizePath(cwd)
   const segments = flat.split(/(?:&&|\|\||[;\n|])+/)
   for (const segment of segments) {
     const cdMatch = CD_COMMAND.exec(segment)
     if (cdMatch) {
       const cdTarget = tokenizeShellArgs(cdMatch[1] ?? '')[0]
       if (!cdTarget || cdTarget === '-' || cdTarget.includes('$')) {
-        effectiveCwd = os.homedir()
+        effectiveCwd = canonicalizePath(os.homedir())
       } else {
-        effectiveCwd = resolveToolPath(effectiveCwd, cdTarget)
+        effectiveCwd = effectiveCwd ? resolveToolPath(effectiveCwd, cdTarget) : null
       }
       continue
     }
@@ -189,6 +150,9 @@ function escapingRmTarget(cwd: string, root: string, command: string): string | 
       }
       if (targets.length === 0) continue
 
+      // fail-closed：无法解析工作树根或当前工作目录（如符号链接循环）时一律拒绝递归删除
+      if (!canonicalRoot || !effectiveCwd) return targets[0]
+
       for (const raw of targets) {
         const cleaned = raw.replace(/^['"]|['"]$/g, '')
         if (!cleaned) continue
@@ -205,16 +169,11 @@ function escapingRmTarget(cwd: string, root: string, command: string): string | 
           }
           const staticPrefix = cleaned.split(/[*?]/)[0].replace(/[\\/]+$/, '')
           const prefixTarget = resolveToolPath(effectiveCwd, staticPrefix || '.')
-          const cmpPrefix = normalizeForCompare(canonicalRoot, prefixTarget)
-          if (!isInside(cmpPrefix.root, cmpPrefix.target)) return cleaned
+          if (!prefixTarget || !isPathInsideRoot(canonicalRoot, prefixTarget)) return cleaned
           continue
         }
         const target = resolveToolPath(effectiveCwd, cleaned)
-        const { root: compareRoot, target: compareTarget } = normalizeForCompare(
-          canonicalRoot,
-          target
-        )
-        if (!isInside(compareRoot, compareTarget)) return target
+        if (!target || !isPathInsideRoot(canonicalRoot, target)) return target ?? cleaned
       }
     }
   }
@@ -237,7 +196,14 @@ export function createTaskGuardExtension(context: TaskGuardContext): ExtensionFa
             reason: 'Cannot determine task working directory; blocking tool call (fail-closed).',
           }
         }
-        const root = canonicalize(cwd)
+        const root = canonicalizePath(cwd)
+        if (!root) {
+          if (!guarded) return undefined
+          return {
+            block: true,
+            reason: 'Cannot resolve task working directory; blocking tool call (fail-closed).',
+          }
+        }
 
         const block = (reason: string) => {
           try {
@@ -252,8 +218,12 @@ export function createTaskGuardExtension(context: TaskGuardContext): ExtensionFa
         if (WRITE_TOOLS.has(toolName)) {
           for (const raw of writeTargets(input)) {
             const resolved = resolveToolPath(root, raw)
-            const { root: compareRoot, target: compareTarget } = normalizeForCompare(root, resolved)
-            if (!isInside(compareRoot, compareTarget)) {
+            if (!resolved) {
+              return block(
+                `Refusing to write to unresolvable path (possible symlink loop): ${raw}.`
+              )
+            }
+            if (!isPathInsideRoot(root, resolved)) {
               return block(
                 `Refusing to write outside the task worktree: ${resolved}. Stay inside ${root}.`
               )
@@ -324,10 +294,12 @@ export async function installWorktreePrePushHook(
   try {
     const rawGitDir = await runGit(worktreePath, ['rev-parse', '--git-dir'])
     const rawCommonDir = await runGit(worktreePath, ['rev-parse', '--git-common-dir'])
-    const gitDir = canonicalize(path.resolve(worktreePath, rawGitDir))
-    const commonDir = canonicalize(path.resolve(worktreePath, rawCommonDir))
-    const compared = normalizeForCompare(commonDir, gitDir)
-    if (compared.root === compared.target) {
+    const gitDir = canonicalizePath(path.resolve(worktreePath, rawGitDir))
+    const commonDir = canonicalizePath(path.resolve(worktreePath, rawCommonDir))
+    if (!gitDir || !commonDir) {
+      return { ok: false, error: 'Cannot resolve git directory paths for worktree' }
+    }
+    if (normalizeForComparison(commonDir) === normalizeForComparison(gitDir)) {
       return { ok: false, error: 'Refusing to install pre-push hook on the main worktree' }
     }
 

@@ -251,6 +251,9 @@ export async function createCloudServer(
     hub,
     logger,
     wake: (payload) => session.wake(payload),
+    ...(config.worktreeReclaimDelayMs !== undefined
+      ? { reclaimDelayMs: config.worktreeReclaimDelayMs }
+      : {}),
   })
 
   // 两个对象在构造时互相引用：先建后注入，避免循环依赖
@@ -304,10 +307,20 @@ export async function createCloudServer(
     logger,
   })
 
+  let activeHttpRequests = 0
+  const httpDrainResolvers: Array<() => void> = []
+
   const server = createServer((req, res) => {
+    activeHttpRequests += 1
     void (async () => {
       try {
-        const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
+        let url: URL
+        try {
+          url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
+        } catch {
+          sendJson(res, 400, { error: 'bad-request' })
+          return
+        }
         if ((req.method ?? 'GET') === 'GET') {
           const served = await serveStatic(config.webDir || defaultWebDir(), url.pathname, res)
           if (served) return
@@ -335,6 +348,11 @@ export async function createCloudServer(
         }
         logger.error('[cloud] request failed:', error instanceof Error ? error.stack : error)
         if (!res.headersSent) sendJson(res, 500, { error: 'server-error' })
+      } finally {
+        activeHttpRequests -= 1
+        if (activeHttpRequests === 0 && httpDrainResolvers.length > 0) {
+          while (httpDrainResolvers.length > 0) httpDrainResolvers.pop()?.()
+        }
       }
     })()
   })
@@ -641,7 +659,7 @@ export async function createCloudServer(
 
   function publishDevice(deviceId: string): void {
     const device = store.findDevice(deviceId)
-    if (!device) return
+    if (!device || device.revokedAt !== null) return
     hub.publish({ type: 'device', device: dispatcher.deviceSnapshot(device) })
   }
 
@@ -1022,17 +1040,49 @@ export async function createCloudServer(
       closePromise = (async () => {
         closing = true
         clearInterval(sweeper)
+        dispatcher.dispose()
+        // 1. 先停接新连接并等待在途 HTTP 请求排空，防止请求撞上已关闭的 SQLite store
+        const serverClosed = server.listening
+          ? new Promise<void>((resolve) => {
+              let settled = false
+              const finish = () => {
+                if (settled) return
+                settled = true
+                clearTimeout(forceTimer)
+                resolve()
+              }
+              const forceTimer = setTimeout(() => {
+                server.closeAllConnections?.()
+                finish()
+              }, 5_000)
+              forceTimer.unref?.()
+              server.close(() => finish())
+              server.closeIdleConnections?.()
+            })
+          : Promise.resolve()
+        if (activeHttpRequests > 0) {
+          await Promise.race([
+            new Promise<void>((resolve) => {
+              httpDrainResolvers.push(resolve)
+            }),
+            new Promise<void>((resolve) => {
+              const timer = setTimeout(resolve, 5_000)
+              timer.unref?.()
+            }),
+          ])
+        }
+        // 2. 断开所有 WS 连接（同步解除升级后 TCP 句柄对 server.close() 的占用）并等在途设备帧收尾
         hub.stop()
+        wsServer.close()
+        await serverClosed
+        await Promise.allSettled([...deviceFrameChains.values()])
+        // 3. 停止并释放云端 Agent
         await session.stopReply().catch(() => undefined)
         await agent.dispose().catch(() => undefined)
+        // 4. 最后刷盘并关闭 store，确保上述所有收尾逻辑都不碰已关闭句柄
         await memoryStore.flush().catch(() => undefined)
         await store.flush().catch(() => undefined)
         store.close()
-        await new Promise<void>((resolve) => {
-          server.close(() => resolve())
-          // 主动断开空闲 HTTP keep-alive 连接，防止优雅退出无限挂起
-          server.closeAllConnections?.()
-        })
       })()
       return closePromise
     },

@@ -125,7 +125,9 @@ export function createCloudToolsExtension(deps: CloudToolsDeps): ExtensionFactor
       } as any,
       async execute(_id: string, params: { deviceId?: string }) {
         const device = params.deviceId ? deps.store.findDevice(params.deviceId) : undefined
-        if (!device) return toolError(`Unknown device: ${String(params.deviceId)}`)
+        if (!device || device.revokedAt !== null) {
+          return toolError(`Unknown device: ${String(params.deviceId)}`)
+        }
         const lines = device.workspaces.map(
           (workspace) =>
             `- ${workspace.name} (${workspace.path})${workspace.isGit ? '' : ' — not a git repository, cannot accept tasks'}`

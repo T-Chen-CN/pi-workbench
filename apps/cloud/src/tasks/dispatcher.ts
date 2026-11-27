@@ -80,6 +80,8 @@ export function toUnitView(unit: UnitRecord): CloudUnitView {
 
 /** 同一工作单元内通过 sameUnit 派发的工单上限，防止 quota=1 时无限循环派单绕过额度 */
 const MAX_TASKS_PER_UNIT = 20
+/** 干净工作树自动回收的默认空闲延迟（10 分钟），为 2s 节流唤醒后的 sameUnit 跟单留足窗口 */
+export const DEFAULT_WORKTREE_RECLAIM_DELAY_MS = 10 * 60 * 1000
 
 export class TaskDispatcher {
   /** 单设备在途已下发但尚未收到 assigned 的工单（防并发 tryDispatch 同时下发多条 queued） */
@@ -92,6 +94,9 @@ export class TaskDispatcher {
   private reportedToolStalls = new Set<string>()
   /** 同一静默窗口只唤醒一次：记录已告警时的 lastEventAt（C-02） */
   private reportedSilenceAt = new Map<string, number>()
+  /** 干净工作树延迟回收定时器（按 unitId 管理，同单元新派活 / 手动关闭 / dispose 时取消） */
+  private reclaimTimers = new Map<string, NodeJS.Timeout>()
+  private disposed = false
   /** 启动时间戳：用于服务重启宽限期后收敛离线设备的僵尸活跃工单 */
   private readonly bootAt: number
 
@@ -108,10 +113,34 @@ export class TaskDispatcher {
       silenceCheckMs?: number
       /** 服务重启后对未重连设备的僵尸运行中工单宽限时长（默认 60s） */
       offlineRecoveryGraceMs?: number
+      /** 干净工作树空闲自动回收延迟（毫秒，默认 10 分钟；测试可注入短延迟） */
+      reclaimDelayMs?: number
       now?: () => number
     }
   ) {
     this.bootAt = deps.now?.() ?? Date.now()
+  }
+
+  private reclaimDelayMs(): number {
+    const raw = this.deps.reclaimDelayMs
+    if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) return raw
+    return DEFAULT_WORKTREE_RECLAIM_DELAY_MS
+  }
+
+  private cancelReclaimTimer(unitId: string): void {
+    const timer = this.reclaimTimers.get(unitId)
+    if (!timer) return
+    clearTimeout(timer)
+    this.reclaimTimers.delete(unitId)
+  }
+
+  /** 停机清理：取消所有待执行的延迟回收定时器，避免进程退出或关服后误触发 */
+  dispose(): void {
+    this.disposed = true
+    for (const timer of this.reclaimTimers.values()) {
+      clearTimeout(timer)
+    }
+    this.reclaimTimers.clear()
   }
 
   private maxConcurrent(): number {
@@ -301,6 +330,8 @@ export class TaskDispatcher {
       updatedAt: now,
       progress: { step: 0, lastEventAt: now },
     }
+    // 新工单落入该单元前必须取消挂起的空闲回收定时器，避免工作树被中途销毁
+    this.cancelReclaimTimer(request.workUnitId)
     await store.saveTask(task)
 
     // 工作单元台账：一个单元只对应一个 worktree，后续工单沿用
@@ -676,6 +707,7 @@ export class TaskDispatcher {
     unitId: string,
     reason: 'converged' | 'user-close' | 'sweep' = 'user-close'
   ): Promise<{ ok: boolean; code?: string }> {
+    this.cancelReclaimTimer(unitId)
     const unit = this.deps.store.findUnit(unitId)
     if (!unit) return { ok: false, code: 'unknown-unit' }
     if (unit.closedAt !== null) return { ok: false, code: 'already-closed' }
@@ -695,21 +727,40 @@ export class TaskDispatcher {
   }
 
   /**
-   * A-43：**干净就自动回收**。
+   * A-43：**干净就延迟自动回收**（默认空闲 10 分钟后回收）。
    *
-   * 判定放在云端是因为只有它知道该单元还有没有后续工单：干净但还有后续就不动，
-   * 否则下一张工单会从 base 重开一棵树、丢掉上一张的 commit（A-46）。
+   * 判定放在云端是因为只有它知道该单元还有没有后续工单；采用空闲延迟而非同步立即销毁，
+   * 是为了给 2s 节流唤醒的云端 Agent 留出审查结果并向同一单元派 `sameUnit` 跟单的窗口，
+   * 否则跟单会被 `unit-closed` 拒绝或丢失前序工作树（A-46）。
    */
   private async reclaimIfClean(
     task: CloudTaskSnapshot,
     worktreeClean: boolean | undefined,
     reason: 'converged' | 'sweep'
   ): Promise<void> {
-    if (worktreeClean !== true) return
-    const unit = this.deps.store.findUnit(task.spec.workUnitId)
+    const unitId = task.spec.workUnitId
+    if (this.disposed || worktreeClean !== true) {
+      this.cancelReclaimTimer(unitId)
+      return
+    }
+    const unit = this.deps.store.findUnit(unitId)
     if (!unit || unit.closedAt !== null || unit.closeRequestedAt) return
-    if (this.hasOpenTaskInUnit(task.spec.workUnitId)) return
-    await this.requestUnitClose(unit.unitId, reason)
+    if (this.hasOpenTaskInUnit(unitId)) return
+    this.cancelReclaimTimer(unitId)
+    const timer = setTimeout(() => {
+      if (this.reclaimTimers.get(unitId) === timer) {
+        this.reclaimTimers.delete(unitId)
+      }
+      if (this.disposed) return
+      const latest = this.deps.store.findUnit(unitId)
+      if (!latest || latest.closedAt !== null || latest.closeRequestedAt) return
+      if (this.hasOpenTaskInUnit(unitId)) return
+      void this.requestUnitClose(unitId, reason).catch((error) => {
+        this.deps.logger.warn(`[cloud] delayed worktree reclaim failed for ${unitId}:`, error)
+      })
+    }, this.reclaimDelayMs())
+    timer.unref?.()
+    this.reclaimTimers.set(unitId, timer)
   }
 
   private hasOpenTaskInUnit(unitId: string): boolean {
@@ -732,6 +783,7 @@ export class TaskDispatcher {
   ): Promise<void> {
     const unit = this.deps.store.findUnit(frame.unitId)
     if (!unit || unit.deviceId !== deviceId) return
+    this.cancelReclaimTimer(frame.unitId)
     await this.deps.store.settleUnitClose(frame.unitId, {
       removed: frame.removed,
       dirty: frame.dirty,
@@ -901,7 +953,10 @@ export class TaskDispatcher {
   // ------------------------------ 快照 ------------------------------
 
   deviceSnapshots(): CloudDeviceSnapshot[] {
-    return this.deps.store.listDevices().map((device) => this.deviceSnapshot(device))
+    return this.deps.store
+      .listDevices()
+      .filter((device) => device.revokedAt === null)
+      .map((device) => this.deviceSnapshot(device))
   }
 
   deviceSnapshot(device: DeviceRecord): CloudDeviceSnapshot {
@@ -1037,6 +1092,18 @@ function normalize(value: string): string {
   return value.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
 }
 
+/** UTF-8 安全按字节上限截断，避免切在多字节字符中间产生 \uFFFD 乱码 */
+function sliceUtf8ByBytes(text: string, maxBytes: number): string {
+  if (maxBytes <= 0) return ''
+  const buf = Buffer.from(text, 'utf8')
+  if (buf.length <= maxBytes) return text
+  let end = maxBytes
+  while (end > 0 && (buf[end] & 0xc0) === 0x80) {
+    end -= 1
+  }
+  return buf.subarray(0, end).toString('utf8')
+}
+
 /** 服务端二次夹取 diff 大小，避免异常终端帧把 tasks.json 撑爆（C-03b） */
 function sanitizeIncomingDiff(
   raw: { bytes: number; excerpt: string; truncated?: boolean } | undefined
@@ -1051,10 +1118,10 @@ function sanitizeIncomingDiff(
   if (Buffer.byteLength(excerpt, 'utf8') <= CLOUD_MAX_DIFF_LIMIT_BYTES) {
     return { bytes, excerpt, ...(raw.truncated ? { truncated: true } : {}) }
   }
-  const clipped = Buffer.from(excerpt, 'utf8')
-    .subarray(0, CLOUD_MAX_DIFF_LIMIT_BYTES)
-    .toString('utf8')
-  return { bytes, excerpt: `${clipped}\n... [clipped by server]`, truncated: true }
+  const suffix = '\n... [clipped by server]'
+  const budget = Math.max(0, CLOUD_MAX_DIFF_LIMIT_BYTES - Buffer.byteLength(suffix, 'utf8'))
+  const clipped = sliceUtf8ByBytes(excerpt, budget)
+  return { bytes, excerpt: `${clipped}${suffix}`, truncated: true }
 }
 
 function authorizationError(code: string): string {

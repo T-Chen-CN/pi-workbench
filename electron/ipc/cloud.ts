@@ -201,6 +201,12 @@ export function registerCloudIpc(context: CloudIpcContext): void {
         token: payload.token,
         ...(payload.clientToken ? { clientToken: payload.clientToken } : {}),
       })
+      // 重新配对时先停掉旧实例并清空句柄，避免旧 WS 泄漏或旧执行器向新云端继续回传事件
+      if (deviceAgent) {
+        const previous = deviceAgent
+        deviceAgent = null
+        await previous.stop().catch(() => undefined)
+      }
       const agent = await ensureAgent(context)
       await agent.start()
       // 换了 token：客户端通道必须重连，否则还在用旧凭据

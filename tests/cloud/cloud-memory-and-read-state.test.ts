@@ -243,6 +243,71 @@ describe('C-03a: 云端记忆自动抽取、手工保护、留存文档与梦境
     expect(block).toContain('electron_mirror')
   })
 
+  it('梦境整理按最旧 auto 优先分批，避免 #51..#200 旧自动记忆永久饿死（Bug 7）', async () => {
+    const dir = await makeTempDir('pi-mem-starve-')
+    const store = await CloudMemoryStore.open(dir)
+
+    // 写入 65 条 auto 记忆，时间戳从 1001 递增到 1065
+    const ids: string[] = []
+    for (let i = 1; i <= 65; i += 1) {
+      const item = await store.addMemory({
+        kind: 'fact',
+        content: `auto-memory-${String(i).padStart(3, '0')}`,
+        source: 'auto',
+        now: 1000 + i,
+      })
+      ids.push(item.id)
+    }
+
+    const batches: string[][] = []
+    const captureIds = (prompt: string) =>
+      [...prompt.matchAll(/\[(mem-[a-f0-9]+)\]/g)].map((m) => m[1])
+
+    // 第一轮整理：应优先挑最旧的 50 条（#1..#50），并把它们合并成新 dream 条目
+    await runDreamConsolidation(
+      store,
+      'manual',
+      async (_sys, user) => {
+        const seen = captureIds(user)
+        batches.push(seen)
+        return JSON.stringify({
+          summary: '整理首批 50 条',
+          removeIds: seen,
+          upsert: Array.from({ length: 10 }, (_, idx) => ({
+            kind: 'fact',
+            content: `dream-merged-batch1-${idx}`,
+          })),
+        })
+      },
+      2000
+    )
+
+    // 第二轮整理：新生成的 dream 条目不能挤占剩余 15 条旧 auto 记忆（#51..#65）
+    await runDreamConsolidation(
+      store,
+      'manual',
+      async (_sys, user) => {
+        const seen = captureIds(user)
+        batches.push(seen)
+        return JSON.stringify({
+          summary: '整理剩余 15 条',
+          removeIds: [],
+          upsert: [],
+        })
+      },
+      3000
+    )
+
+    expect(batches).toHaveLength(2)
+    // 第一批包含最旧的第 1 条、不包含最新的第 65 条
+    expect(batches[0]).toContain(ids[0])
+    expect(batches[0]).not.toContain(ids[64])
+    // 第二批覆盖了第 51..65 条（没有任何 auto 记忆饿死）
+    for (let i = 50; i < 65; i += 1) {
+      expect(batches[1]).toContain(ids[i])
+    }
+  })
+
   it('REST 端点：记忆 CRUD、留存文档白名单防穿越、梦境查询与手动触发', async () => {
     const { baseUrl, cookie } = await setupServerWithDevice({
       completeAuxiliary: async () =>

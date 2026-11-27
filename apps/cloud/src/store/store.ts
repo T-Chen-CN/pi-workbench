@@ -49,7 +49,7 @@ export interface DeviceRecord {
   platform: string
   /** 设备执行通道 token（最小权限：仅 /device/ws、工作区上报与自吊销） */
   token: TokenHash
-  /** 桌面用户控制面 token（用于 /client/ws 与管理 REST；缺省仅兼容旧配对记录） */
+  /** 桌面用户控制面 token（用于 /client/ws 与管理 REST；缺失时拒绝控制面鉴权，需重新配对） */
   clientToken?: TokenHash
   createdAt: number
   lastSeenAt: number
@@ -77,6 +77,8 @@ export interface CloudConfigRecord {
   model: string
   credentialCipher: string
   updatedAt: number
+  /** OAuth 刷新等仅更新凭证的时间戳；与 `updatedAt` 分离，避免触发 AgentManager 重建 */
+  credentialUpdatedAt?: number
 }
 
 /** 旧记录形态（只用于识别并丢弃） */
@@ -594,8 +596,9 @@ export class CloudStore {
 
   // ------------------------------ 设备 ------------------------------
 
-  listDevices(): DeviceRecord[] {
-    return this.devicesCache
+  listDevices(options?: { includeRevoked?: boolean }): DeviceRecord[] {
+    if (options?.includeRevoked) return this.devicesCache
+    return this.devicesCache.filter((device) => device.revokedAt === null)
   }
 
   findDevice(id: string): DeviceRecord | undefined {
@@ -609,14 +612,13 @@ export class CloudStore {
   }
 
   /**
-   * 桌面控制面鉴权：已签发独立 clientToken 的设备只认 clientToken（严格拒绝执行通道 token）；
-   * 仅未迁移的老配对记录（无 clientToken 字段）回退 token 兼容。
+   * 桌面控制面鉴权：只认独立签发的 `clientToken`，严格拒绝仅限执行通道的设备 `token`；
+   * 未分离 `clientToken` 的旧配对记录必须重新配对，绝不回退执行通道 token。
    */
   findDeviceByClientToken(token: string): DeviceRecord | undefined {
     return this.devicesCache.find((device) => {
-      if (device.revokedAt) return false
-      if (device.clientToken) return verifyToken(token, device.clientToken)
-      return verifyToken(token, device.token)
+      if (device.revokedAt || !device.clientToken) return false
+      return verifyToken(token, device.clientToken)
     })
   }
 
@@ -926,11 +928,15 @@ export class CloudStore {
     this.configCache = null
   }
 
-  /** 只换凭证，保留 provider / 模型（OAuth 刷新与重新登录都走这条路径） */
+  /** 只换凭证，保留 provider / 模型（OAuth 刷新走此路径；绝不改 updatedAt，否则会触发 AgentManager 无谓重建） */
   async saveCloudCredential(providerId: string, credentialCipher: string): Promise<void> {
     const record = this.getCloudConfig()
     if (!record || record.providerId !== providerId) return
-    const next: CloudConfigRecord = { ...record, credentialCipher, updatedAt: Date.now() }
+    const next: CloudConfigRecord = {
+      ...record,
+      credentialCipher,
+      credentialUpdatedAt: Date.now(),
+    }
     this.runTransaction(() => {
       this.upsertKv(KV_CONFIG, next)
     })

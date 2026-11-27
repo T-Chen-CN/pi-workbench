@@ -127,6 +127,36 @@ describe('健壮性', () => {
     expect((await invoke('bash', { command: 'rm --recursive --force ../other' }))?.block).toBe(true)
     expect((await invoke('bash', { command: 'git \\\n push origin main' }))?.block).toBe(true)
   })
+
+  it('符号链接循环触发 >20 跳时 fail-closed 拦截写入与 rm（Bug 12d）', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-guard-symlink-'))
+    const loopA = path.join(tmp, 'loopA')
+    const loopB = path.join(tmp, 'loopB')
+    let symlinkCreated = false
+    try {
+      try {
+        await fs.symlink(loopB, loopA)
+        await fs.symlink(loopA, loopB)
+        symlinkCreated = true
+      } catch {
+        // Windows 无符号链接权限时跳过文件系统 symlink 创建，改测超深 65 层路径同样 fail-closed
+      }
+      if (symlinkCreated) {
+        const writeRes = await invoke('write', { path: path.join(loopA, 'file.txt') }, { cwd: tmp })
+        expect(writeRes?.block).toBe(true)
+        const rmRes = await invoke('bash', { command: 'rm -rf loopA/file.txt' }, { cwd: tmp })
+        expect(rmRes?.block).toBe(true)
+      } else {
+        const deepRel = Array.from({ length: 66 }, (_, i) => `d${i}`).join('/')
+        const writeRes = await invoke('write', { path: `${deepRel}/file.txt` }, { cwd: tmp })
+        expect(writeRes?.block).toBe(true)
+        const rmRes = await invoke('bash', { command: `rm -rf ${deepRel}/file.txt` }, { cwd: tmp })
+        expect(rmRes?.block).toBe(true)
+      }
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true }).catch(() => undefined)
+    }
+  })
 })
 
 describe('installWorktreePrePushHook（D-32 / A-44）', () => {

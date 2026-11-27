@@ -246,6 +246,11 @@ const PRIVATE_KEY_END_RE = /-----END (?:[A-Z0-9 ]+ )?PRIVATE KEY-----/
 const SECRET_RULES: readonly SecretRule[] = [
   { kind: 'private-key', pattern: PRIVATE_KEY_BEGIN_RE },
   { kind: 'aws-access-key', pattern: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/ },
+  {
+    kind: 'aws-secret-key',
+    pattern: /\baws[_-]?secret[_-]?access[_-]?key["']?\s*[:=]\s*['"]?([A-Za-z0-9/+=]{20,})['"]?/i,
+  },
+  { kind: 'pi-cloud-token', pattern: /\bpk_[A-Za-z0-9_-]{32,}\b/ },
   { kind: 'github-token', pattern: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}\b/ },
   { kind: 'github-token', pattern: /\bgithub_pat_[A-Za-z0-9_]{22,}\b/ },
   { kind: 'slack-token', pattern: /\bxox[baprs]-[0-9A-Za-z-]{10,}\b/ },
@@ -268,7 +273,7 @@ const SECRET_RULES: readonly SecretRule[] = [
   {
     kind: 'secret-assignment',
     pattern:
-      /(?:api[_-]?key|secret[_-]?key|access[_-]?token|private[_-]?key|client[_-]?secret|auth[_-]?token|password|passwd|db[_-]?pass)\s*[:=]\s*['"]?([A-Za-z0-9/+=._-]{16,})['"]?/i,
+      /(?:api[_-]?key|secret[_-]?key|secret[_-]?access[_-]?key|access[_-]?token|private[_-]?key|client[_-]?secret|auth[_-]?token|password|passwd|db[_-]?pass)["']?\s*[:=]\s*['"]?([A-Za-z0-9/+=._-]{16,})['"]?/i,
   },
 ]
 
@@ -281,6 +286,7 @@ function detectSecretKind(line: string): string | null {
     // 泛化赋值与凭据规则要跳过明显的占位符示例，减少误报
     if (
       rule.kind === 'secret-assignment' ||
+      rule.kind === 'aws-secret-key' ||
       rule.kind === 'bearer-token' ||
       rule.kind === 'database-url' ||
       rule.kind === 'npm-token'
@@ -377,20 +383,38 @@ export async function scanWorktreeSecrets(
       env: sanitizeTerminalEnv(process.env),
     }).then((result) => result.stdout)
 
-  // 1. 相对 base 的全部 diff（含已提交 + 工作区修改）；没有 base 时退回 HEAD 与工作区
-  const diffSpecs: string[][] = base
-    ? [['diff', '--no-color', '-U0', base]]
-    : [
-        ['diff', '--no-color', '-U0', 'HEAD'],
-        ['diff', '--no-color', '-U0'],
-      ]
-  for (const args of diffSpecs) {
+  // 1. 相对 base 的全部 diff（含已提交 + 工作区修改）；没有 base 时退回 HEAD（已含暂存与未暂存），
+  // 仅当 HEAD 不可用（unborn 分支）时再退回暂存/工作区 diff，避免重复扫描
+  let diffResolved = false
+  if (base) {
     try {
-      const diff = await runGit(args)
+      const diff = await runGit(['diff', '--no-color', '-U0', base])
       if (diff) push(scanDiffForSecrets(diff))
-      if (base) break
+      diffResolved = true
     } catch {
-      // base 不可用时继续尝试回退 diff
+      // base 不可用时继续尝试 HEAD
+    }
+  }
+  if (!diffResolved) {
+    try {
+      const diff = await runGit(['diff', '--no-color', '-U0', 'HEAD'])
+      if (diff) push(scanDiffForSecrets(diff))
+      diffResolved = true
+    } catch {
+      // 无 HEAD（unborn 分支）时分别扫描暂存与未暂存改动
+    }
+  }
+  if (!diffResolved) {
+    for (const args of [
+      ['diff', '--no-color', '-U0', '--cached'],
+      ['diff', '--no-color', '-U0'],
+    ]) {
+      try {
+        const diff = await runGit(args)
+        if (diff) push(scanDiffForSecrets(diff))
+      } catch {
+        // 忽略非 git 目录错误
+      }
     }
   }
 
@@ -461,6 +485,18 @@ function redactDiffLine(line: string, state: { inPrivateKeyBlock: boolean }): st
   const kind = detectSecretKind(body)
   if (!kind) return line
   return `${prefix}[REDACTED: ${kind}]`
+}
+
+/** UTF-8 安全按字节上限截断，避免切在多字节字符（如中文）中间产生 \uFFFD */
+export function sliceUtf8ByBytes(text: string, maxBytes: number): string {
+  if (maxBytes <= 0) return ''
+  const buf = Buffer.from(text, 'utf8')
+  if (buf.length <= maxBytes) return text
+  let end = maxBytes
+  while (end > 0 && (buf[end] & 0xc0) === 0x80) {
+    end -= 1
+  }
+  return buf.subarray(0, end).toString('utf8')
 }
 
 function clampDiffLimit(limitBytes?: number): number {
@@ -536,7 +572,7 @@ export function sanitizeDiffExcerpt(
     const lineBytes = Buffer.byteLength(line, 'utf8') + (kept.length > 0 ? 1 : 0)
     if (used + lineBytes > budget) {
       if (kept.length === 0) {
-        kept.push(Buffer.from(line, 'utf8').subarray(0, budget).toString('utf8'))
+        kept.push(sliceUtf8ByBytes(line, budget))
       }
       break
     }
@@ -568,19 +604,37 @@ export async function collectTaskDiff(
     }).then((result) => result.stdout)
 
   const parts: string[] = []
-  const diffSpecs: string[][] = base
-    ? [['diff', '--no-color', '-U3', base]]
-    : [
-        ['diff', '--no-color', '-U3', 'HEAD'],
-        ['diff', '--no-color', '-U3'],
-      ]
-  for (const args of diffSpecs) {
+  let diffResolved = false
+  if (base) {
     try {
-      const diff = await runGit(args)
+      const diff = await runGit(['diff', '--no-color', '-U3', base])
       if (diff.trim()) parts.push(diff.trimEnd())
-      if (base) break
+      diffResolved = true
     } catch {
-      // base 不可用时继续尝试回退 diff
+      // base 不可用时回退 HEAD
+    }
+  }
+  if (!diffResolved) {
+    try {
+      // `git diff HEAD` 已包含相对 HEAD 的已暂存 + 未暂存改动，成功后绝不能再追加 `git diff` 否则重复
+      const diff = await runGit(['diff', '--no-color', '-U3', 'HEAD'])
+      if (diff.trim()) parts.push(diff.trimEnd())
+      diffResolved = true
+    } catch {
+      // 无 HEAD（unborn 分支）时分别采集暂存区与工作区改动
+    }
+  }
+  if (!diffResolved) {
+    for (const args of [
+      ['diff', '--no-color', '-U3', '--cached'],
+      ['diff', '--no-color', '-U3'],
+    ]) {
+      try {
+        const diff = await runGit(args)
+        if (diff.trim()) parts.push(diff.trimEnd())
+      } catch {
+        // 忽略非 git 目录错误
+      }
     }
   }
 

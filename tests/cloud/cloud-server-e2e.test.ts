@@ -64,6 +64,7 @@ beforeAll(async () => {
     cookieSecret: 'e2e-cookie-secret',
     secureCookies: false,
     version: 'e2e',
+    worktreeReclaimDelayMs: 150,
   })
   const port = await server.listen()
   base = `http://127.0.0.1:${port}`
@@ -525,13 +526,16 @@ describe('工作树回收（A-43 / A-46）', () => {
     device?.close()
   })
 
-  it('干净树：工单结束就自动回收，回执后才算结束（A-43）', async () => {
+  it('干净树：工单结束后延迟空闲自动回收，回执后才算结束（A-43 / Decision 2.A）', async () => {
     const authorizationId = await authorize()
     const taskId = await dispatchTask(authorizationId, 'unit-auto', 'clean task')
     await acceptAndRun(taskId)
     await finish(taskId, true, 'unit-auto')
 
-    // 云端自动下发 close_unit，不需要用户点
+    // 刚结单时不会同步立即销毁工作树（给云端 Agent 留出 sameUnit 跟单窗口）
+    expect(closeFrames('unit-auto')).toHaveLength(0)
+
+    // 超过空闲延迟后云端自动下发 close_unit，不需要用户点
     const request = await waitFor(
       () => closeFrames('unit-auto')[0],
       3000,
@@ -604,6 +608,25 @@ describe('工作树回收（A-43 / A-46）', () => {
     await finish(second, true, 'unit-serial')
     await waitFor(() => closeFrames('unit-serial')[0], 3000, 'close after last task')
     expect(closeFrames('unit-serial')).toHaveLength(1)
+  })
+
+  it('延迟窗口内同单元跟单（sameUnit）取消待回收定时器，不会提前销毁工作树', async () => {
+    const authorizationId = await authorize(3)
+    const first = await dispatchTask(authorizationId, 'unit-followup', 'first task')
+    await acceptAndRun(first)
+    await finish(first, true, 'unit-followup')
+
+    // 空闲延迟（150ms）到期前同单元派发跟单：应取消定时器并成功复用到同一工作单元
+    const second = await dispatchTask(authorizationId, 'unit-followup', 'follow-up task')
+    await acceptAndRun(second)
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    expect(closeFrames('unit-followup')).toHaveLength(0)
+
+    // 跟单结束并过完空闲延迟后才回收一次
+    await finish(second, true, 'unit-followup')
+    const request = await waitFor(() => closeFrames('unit-followup')[0], 3000, 'close after follow-up')
+    expect(request.reason).toBe('converged')
+    expect(closeFrames('unit-followup')).toHaveLength(1)
   })
 
   it('脏树：不自动回收；用户手动结束后按回执标「待处理」（A-43）', async () => {

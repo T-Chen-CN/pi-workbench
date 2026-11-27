@@ -74,14 +74,11 @@ export class BoundedLog {
     this.trim()
   }
 
-  /** 续读：返回 lastAckSeq 之后的帧；overflow 表示中间有丢失或服务端重启游标归零，调用方应回 snapshot / 重置游标 */
+  /** 续读：返回 lastAckSeq 之后的帧；overflow 表示中间有容量/过期淘汰或服务端重启游标归零（dropTask 造成的空洞不是溢出） */
   since(lastAckSeq: number): { frames: StoredFrame[]; overflow: boolean } {
     this.trim()
-    const first = this.entries[0]
     const overflow =
-      lastAckSeq > this.lastSeq ||
-      (lastAckSeq > 0 && this.evictedUpTo > lastAckSeq) ||
-      Boolean(first && lastAckSeq > 0 && first.seq > lastAckSeq + 1)
+      lastAckSeq > this.lastSeq || (lastAckSeq > 0 && lastAckSeq < this.evictedUpTo)
     return {
       frames: this.entries.filter((entry) => entry.seq > lastAckSeq),
       overflow,
@@ -445,13 +442,15 @@ export class Hub {
 
   private tick(): void {
     const now = this.now()
+    // 严格按 CLOUD_OFFLINE_TIMEOUT_MS（60s）静默判离线，每 25s 发 ping 触发 pong 刷新 lastSeenAt，
+    // 避免单次延迟 pong 在 25s 就被误杀
     for (const peer of [...this.clients]) {
-      if (!peer.alive || now - peer.lastSeenAt > CLOUD_OFFLINE_TIMEOUT_MS) {
+      if (now - peer.lastSeenAt > CLOUD_OFFLINE_TIMEOUT_MS) {
+        peer.alive = false
         peer.socket.terminate()
         this.removeClient(peer)
         continue
       }
-      peer.alive = false
       try {
         peer.socket.ping()
       } catch {
@@ -459,13 +458,13 @@ export class Hub {
       }
     }
     for (const [deviceId, peer] of [...this.devices]) {
-      if (!peer.alive || now - peer.lastSeenAt > CLOUD_OFFLINE_TIMEOUT_MS) {
+      if (now - peer.lastSeenAt > CLOUD_OFFLINE_TIMEOUT_MS) {
+        peer.alive = false
         peer.socket.terminate()
         this.devices.delete(deviceId)
         this.handlers.onDeviceOffline(deviceId)
         continue
       }
-      peer.alive = false
       try {
         peer.socket.ping()
       } catch {

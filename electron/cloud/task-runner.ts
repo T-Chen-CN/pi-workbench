@@ -192,6 +192,10 @@ interface ActiveTask {
   repoPath: string
   worktreePath: string
   sessionId: string
+  /** 创建该工单会话时的 AgentManager 实例，避免热切配置时提前销毁仍在使用的旧 manager */
+  manager?: any
+  /** 同一工单的轮次串行链（初轮与 ask_cloud 回答续轮），防止并发调用 manager.chat */
+  turnChain?: Promise<void>
   status: CloudTaskStatus
   startedAt: number
   /** 最近一次进度上报时间（节流用） */
@@ -222,6 +226,8 @@ export class CloudTaskRunner {
   private deps: CloudTaskRunnerDeps
   private manager: any = null
   private managerKey = ''
+  /** 已替换但仍有活跃/waiting_human 工单引用的旧 AgentManager，等引用归零后延迟销毁 */
+  private retiredManagers = new Set<any>()
   private active = new Map<string, ActiveTask>()
   /** 正在准备阶段（建 worktree / 建会话）的工单：防并发 start 与 closeUnit 竞态 */
   private starting = new Map<string, string>()
@@ -311,6 +317,32 @@ export class CloudTaskRunner {
     await writeJsonAtomic(this.tasksFile(), data)
   }
 
+  /** 应用退出前已成功上报 `task_interrupted` 的工单须从台账移除，避免下次启动重复上报 */
+  async clearPersistedTasks(taskIds: string[]): Promise<void> {
+    let changed = false
+    for (const id of taskIds) {
+      if (this.persistedTasks.delete(id)) changed = true
+    }
+    if (changed) await this.persistTasks()
+  }
+
+  private taskManager(task: ActiveTask): any {
+    return task.manager ?? this.manager
+  }
+
+  private disposeUnusedRetiredManagers(): void {
+    if (this.retiredManagers.size === 0) return
+    const inUse = new Set<any>()
+    for (const activeTask of this.active.values()) {
+      if (activeTask.manager) inUse.add(activeTask.manager)
+    }
+    for (const retired of [...this.retiredManagers]) {
+      if (retired === this.manager || inUse.has(retired)) continue
+      this.retiredManagers.delete(retired)
+      void retired.dispose?.().catch(() => undefined)
+    }
+  }
+
   /** 该单元的工作树；没有就新建一个（G12：一单元一条绑定，同单元加锁防并发重复建树） */
   private async ensureUnitWorktree(spec: CloudTaskSpec): Promise<{
     ok: boolean
@@ -386,8 +418,8 @@ export class CloudTaskRunner {
     if (!config || !config.modelId) {
       throw new Error('API configuration is missing; configure the model in Settings first')
     }
-    // 指纹只在换 key 时变；OAuth token 刷新不重建工单运行时（D21）
-    const key = `${config.providerId}|${config.modelId}|${config.fingerprint}`
+    // 指纹只在换 key 时变；OAuth token 刷新不重建工单运行时（D21），但 overrides 变化必须重建
+    const key = `${config.providerId}|${config.modelId}|${config.fingerprint}|${serializeApiOverrides(config.overrides)}`
     if (this.manager && this.managerKey === key) return this.manager
 
     const { AgentManager } = await import(getBridgeEntryUrl())
@@ -430,7 +462,13 @@ export class CloudTaskRunner {
     this.manager = manager
     this.managerKey = key
     if (previous && previous !== manager) {
-      await previous.dispose?.().catch(() => undefined)
+      // 仍有活跃或 waiting_human 工单引用旧 manager 时必须延迟销毁，否则会直接打死在途会话
+      const stillInUse = [...this.active.values()].some((item) => item.manager === previous)
+      if (stillInUse) {
+        this.retiredManagers.add(previous)
+      } else {
+        await previous.dispose?.().catch(() => undefined)
+      }
     }
     return manager
   }
@@ -535,25 +573,21 @@ export class CloudTaskRunner {
   }
 
   async start(taskId: string, spec: CloudTaskSpec, attempt = 0): Promise<void> {
-    if (attempt > 0) {
-      return this.runStart(taskId, spec, attempt)
-    }
     if (this.disposed) return
     if (this.active.has(taskId) || this.starting.has(taskId)) {
       this.deps.logger.warn(`[Cloud Task] task ${taskId} is already running`)
       return
     }
-    // 立即登记启动占位，阻断同一单元在准备期被 closeUnit 误删
+    // 立即登记启动占位并强制走 startChain 串行化（无论 attempt 取何值都不得绕过）
     this.starting.set(taskId, spec.workUnitId)
     const run = this.startChain
       .catch(() => undefined)
-      .then(() => this.runStart(taskId, spec, 0))
+      .then(() => this.runStart(taskId, spec, attempt))
     this.startChain = run.catch(() => undefined)
     return run
   }
 
   private async runStart(taskId: string, spec: CloudTaskSpec, attempt: number): Promise<void> {
-    let handedOffToRetry = false
     if (this.disposed) {
       this.starting.delete(taskId)
       return
@@ -590,6 +624,10 @@ export class CloudTaskRunner {
       try {
         manager = await this.ensureManager()
       } catch (error) {
+        if (this.disposed) {
+          this.starting.delete(taskId)
+          return
+        }
         if (this.cancelRequested.has(taskId)) {
           this.cancelRequested.delete(taskId)
           const clean = await this.isWorktreeClean(unit.worktreePath)
@@ -597,15 +635,25 @@ export class CloudTaskRunner {
           this.deps.onInterrupted(taskId, 'user-cancel', clean)
           return
         }
-        const reused = attempt === 0 && (await this.retryAfterConfigRefresh(taskId, spec))
-        if (reused) {
-          // 重试期间必须持续持有 starting 锁，防止 closeUnit 在重试窗口误删工作树
-          handedOffToRetry = true
-        } else {
+        // 在 startChain 内部原地重试一次（例如用户刚在设置里填好 Key），既持有 starting 占位也不绕过串行链
+        const refreshed = attempt === 0 ? await this.retryAfterConfigRefresh(taskId) : null
+        if (this.disposed) {
+          this.starting.delete(taskId)
+          return
+        }
+        if (this.cancelRequested.has(taskId)) {
+          this.cancelRequested.delete(taskId)
+          const clean = await this.isWorktreeClean(unit.worktreePath)
+          this.starting.delete(taskId)
+          this.deps.onInterrupted(taskId, 'user-cancel', clean)
+          return
+        }
+        if (!refreshed) {
           // 准备阶段就失败（未配 Key 最常见）：必须带上 worktreeClean，否则云端不会回收这棵树
           await this.failWithWorktree(taskId, error instanceof Error ? error.message : String(error), unit.worktreePath)
+          return
         }
-        return
+        manager = refreshed
       }
       if (this.cancelRequested.has(taskId)) {
         this.cancelRequested.delete(taskId)
@@ -655,6 +703,7 @@ export class CloudTaskRunner {
         repoPath: spec.repo.workspacePath,
         worktreePath: unit.worktreePath,
         sessionId,
+        manager,
         status: 'assigned',
         startedAt: this.now(),
         lastMilestoneAt: 0,
@@ -686,13 +735,14 @@ export class CloudTaskRunner {
       this.startTaskWatchdogs(task)
       this.deps.onMilestone(taskId, { kind: 'accepted', text: '已接单，开始执行', at: this.now() })
 
-      await this.runTurn(task, spec, buildTaskPrompt(spec, unit.worktreePath))
+      const firstTurn = this.runTurn(task, spec, buildTaskPrompt(spec, unit.worktreePath))
+      task.turnChain = firstTurn.catch(() => undefined)
+      await firstTurn
     } finally {
-      if (!handedOffToRetry) this.starting.delete(taskId)
+      this.starting.delete(taskId)
     }
   }
 
-  /** 配置刚改过时允许重试一次（例如用户刚在设置里填好 Key） */
   /**
    * 准备阶段失败（还没进 `active`）：也要把脏标记报上去。
    * 这些失败点在工作树已建好之后，不报 `worktreeClean` 云端就永远不发回收请求，树一直挂在磁盘上。
@@ -706,19 +756,7 @@ export class CloudTaskRunner {
     let clean = true
     try {
       const output = await this.git(worktreePath, ['status', '--porcelain'])
-      changedFiles = annotateChangedFiles(
-        output
-          .split(/\r?\n/)
-          .filter((line) => line.trim())
-          .map((line) => ({
-            path: line.slice(3).trim().replace(/^"|"$/g, '').replace(/\\/g, '/'),
-            kind: (line.slice(0, 2).trim() === '??'
-              ? 'added'
-              : line.includes('D')
-                ? 'deleted'
-                : 'modified') as CloudChangedFile['kind'],
-          }))
-      )
+      changedFiles = annotateChangedFiles(parsePorcelainChangedFiles(output))
       clean = changedFiles.length === 0
     } catch {
       // git 不可用：按“不确定”处理，宁可保留树也不要误删
@@ -736,20 +774,20 @@ export class CloudTaskRunner {
     )
   }
 
-  private async retryAfterConfigRefresh(taskId: string, spec: CloudTaskSpec): Promise<boolean> {
+  /** 配置刚改过时在当前 startChain 内延迟 1s 重试一次 ensureManager，绝不绕过串行链 */
+  private async retryAfterConfigRefresh(taskId: string): Promise<any | null> {
     await new Promise((resolve) => setTimeout(resolve, 1_000))
+    if (this.disposed || this.cancelRequested.has(taskId)) return null
     try {
-      await this.ensureManager()
+      return await this.ensureManager()
     } catch {
-      return false
+      return null
     }
-    void this.start(taskId, spec, 1)
-    return true
   }
 
   private async runTurn(task: ActiveTask, spec: CloudTaskSpec, prompt: string): Promise<void> {
     try {
-      const outcome = await this.manager.chat(task.sessionId, prompt)
+      const outcome = await this.taskManager(task).chat(task.sessionId, prompt)
       if (this.cancelRequested.has(task.id)) {
         this.cancelRequested.delete(task.id)
         return
@@ -850,9 +888,8 @@ export class CloudTaskRunner {
           })
         }
         if (toolName === 'write' || toolName === 'edit') {
-          const args = String(event.argsSummary ?? '')
-          const match = args.match(/[\\/]?([\w.-]+\.[A-Za-z0-9]+)/)
-          if (match) this.noteChanged(task, match[0], 'modified')
+          const targetPath = extractWriteOrEditPath(event)
+          if (targetPath) this.noteChanged(task, targetPath, 'modified')
         }
         this.maybeMilestone(task, {
           kind: 'progress',
@@ -868,12 +905,13 @@ export class CloudTaskRunner {
   private noteChanged(task: ActiveTask, filePath: string, kind: CloudChangedFile['kind']): void {
     const relative = toWorktreeRelative(task.worktreePath, filePath)
     if (!relative) return
-    if (task.changed.has(relative)) return
-    task.changed.set(relative, { path: relative.replace(/\\/g, '/'), kind })
+    const normalized = relative.replace(/\\/g, '/').replace(/^\.\//, '')
+    if (!normalized || task.changed.has(normalized)) return
+    task.changed.set(normalized, { path: normalized, kind })
     if (task.changed.size === 1) {
       this.deps.onMilestone(task.id, {
         kind: 'first-change',
-        text: `第一次改动：${relative}`,
+        text: `第一次改动：${normalized}`,
         at: Date.now(),
         changedFiles: [...task.changed.values()],
       })
@@ -928,6 +966,7 @@ export class CloudTaskRunner {
     this.stopTaskWatchdogs(task)
     this.releaseTaskSession(task)
     this.active.delete(task.id)
+    this.disposeUnusedRetiredManagers()
     this.cancelRequested.delete(task.id)
     this.persistedTasks.delete(task.id)
     await this.persistTasks()
@@ -944,6 +983,7 @@ export class CloudTaskRunner {
       task.worktreePath
     ).catch(() => [] as CloudSecretHit[])
     this.active.delete(task.id)
+    this.disposeUnusedRetiredManagers()
     this.cancelRequested.delete(task.id)
     this.persistedTasks.delete(task.id)
     await this.persistTasks().catch(() => undefined)
@@ -964,7 +1004,7 @@ export class CloudTaskRunner {
       // ignore
     }
     task.unsubscribeTrace = undefined
-    void this.manager?.closeSession?.(task.sessionId)?.catch?.(() => undefined)
+    void this.taskManager(task)?.closeSession?.(task.sessionId)?.catch?.(() => undefined)
   }
 
   /** 工作树是否干净：`git status --porcelain` 无输出（ignored 文件不算脏，所以装了依赖也算干净） */
@@ -1106,7 +1146,7 @@ export class CloudTaskRunner {
     }
     this.cancelRequested.add(taskId)
     try {
-      await this.manager?.abort?.(task.sessionId)
+      await this.taskManager(task)?.abort?.(task.sessionId)
     } catch (error) {
       this.deps.logger.warn('[Cloud Task] abort failed:', error)
     }
@@ -1115,23 +1155,40 @@ export class CloudTaskRunner {
     // abort 之后再判：停止了但树是干净的，服务端可以直接自动回收（A-43）
     const worktreeClean = await this.isWorktreeClean(task.worktreePath)
     this.active.delete(taskId)
+    this.disposeUnusedRetiredManagers()
     this.persistedTasks.delete(taskId)
     await this.persistTasks().catch(() => undefined)
     this.deps.onInterrupted(taskId, reason, worktreeClean)
     return true
   }
 
-  /** 用户回答 `ask_cloud` 的问题：以一条新用户轮次继续 */
+  /** 用户回答 `ask_cloud` 的问题：校验等待状态并按工单串行链续跑，防止重放帧并发调 chat */
   async answer(taskId: string, text: string, questionId?: string): Promise<boolean> {
     const task = this.active.get(taskId)
     if (!task) return false
+    if (!task.awaitingAnswer) return false
     if (task.questionId && questionId && task.questionId !== questionId) return false
+    // 必须在任何 await 之前同步消费 awaitingAnswer，阻止重复到达的 task_answer 并发调用 manager.chat()
     task.awaitingAnswer = false
     task.questionId = undefined
-    this.setStatus(taskId, 'running')
+    const run = (task.turnChain ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(() => this.runAnswerTurn(task, text))
+    task.turnChain = run.then(
+      () => undefined,
+      () => undefined
+    )
+    return run
+  }
+
+  private async runAnswerTurn(task: ActiveTask, text: string): Promise<boolean> {
+    if (this.disposed || !this.active.has(task.id) || this.cancelRequested.has(task.id)) {
+      return false
+    }
+    this.setStatus(task.id, 'running')
     this.startTaskWatchdogs(task)
     try {
-      const outcome = await this.manager.chat(
+      const outcome = await this.taskManager(task).chat(
         task.sessionId,
         `用户的回答（针对上一个问题）：\n\n${text.trim()}\n\n请继续执行工单。`
       )
@@ -1161,6 +1218,7 @@ export class CloudTaskRunner {
   async message(taskId: string, text: string): Promise<boolean> {
     const task = this.active.get(taskId)
     if (!task) return false
+    const manager = this.taskManager(task)
     const preview = text.trim().replace(/\s+/g, ' ').slice(0, 80)
     if (preview) {
       this.deps.onMilestone(task.id, {
@@ -1169,12 +1227,12 @@ export class CloudTaskRunner {
         at: this.now(),
       })
     }
-    const busy = Boolean(this.manager?.isSessionBusy?.(task.sessionId))
+    const busy = Boolean(manager?.isSessionBusy?.(task.sessionId))
     try {
       if (busy) {
-        await this.manager.steer?.(task.sessionId, text)
+        await manager.steer?.(task.sessionId, text)
       } else {
-        const outcome = await this.manager.chat(task.sessionId, text)
+        const outcome = await manager.chat(task.sessionId, text)
         if (this.cancelRequested.has(task.id)) {
           this.cancelRequested.delete(task.id)
           return false
@@ -1204,17 +1262,23 @@ export class CloudTaskRunner {
     this.disposed = true
     for (const task of [...this.active.values()]) {
       this.stopTaskWatchdogs(task)
-      this.releaseTaskSession(task)
+      // 必须先 abort 再 closeSession：先关闭会话会导致 abort 找不到会话而无法终止在途请求
       try {
-        await this.manager?.abort?.(task.sessionId)
+        await this.taskManager(task)?.abort?.(task.sessionId)
       } catch {
         // ignore
       }
+      this.releaseTaskSession(task)
     }
     this.active.clear()
     this.cancelRequested.clear()
-    await this.manager?.dispose?.().catch(() => undefined)
+    const managersToDispose = new Set<any>(this.retiredManagers)
+    if (this.manager) managersToDispose.add(this.manager)
+    this.retiredManagers.clear()
     this.manager = null
+    for (const mgr of managersToDispose) {
+      await mgr?.dispose?.().catch(() => undefined)
+    }
   }
 }
 
@@ -1256,8 +1320,90 @@ export function buildTaskPrompt(spec: CloudTaskSpec, worktreePath: string): stri
   return lines.join('\n')
 }
 
-/** 给测试用的纯函数版本（压缩参数写入是纯文件行为，不需要起 AgentManager） */
-export const taskRunnerInternals = { ensureTaskAgentSettings, TASK_COMPACTION_SETTINGS }
+function serializeApiOverrides(
+  overrides?: Record<string, { contextWindow?: number; maxTokens?: number }>
+): string {
+  if (!overrides) return ''
+  const entries = Object.keys(overrides)
+    .sort()
+    .map((key) => [key, overrides[key]?.contextWindow ?? null, overrides[key]?.maxTokens ?? null])
+  return JSON.stringify(entries)
+}
+
+/** 仅按 porcelain 前两位状态码判定文件改动类型，绝不对文件名本身做 includes('D') */
+function parsePorcelainChangedFiles(output: string): CloudChangedFile[] {
+  const result: CloudChangedFile[] = []
+  for (const line of output.split(/\r?\n/)) {
+    if (!line.trim()) continue
+    const status = line.slice(0, 2)
+    const filePath = line.slice(3).trim().replace(/^"|"$/g, '').replace(/\\/g, '/')
+    if (!filePath) continue
+    const kind: CloudChangedFile['kind'] =
+      status.trim() === '??'
+        ? 'added'
+        : status.includes('D')
+          ? 'deleted'
+          : status.includes('R')
+            ? 'renamed'
+            : 'modified'
+    result.push({ path: filePath, kind })
+  }
+  return result
+}
+
+/**
+ * 从 write / edit 工具起始事件中提取完整目标路径：
+ * 优先结构化字段与已知 JSON 路径键，其次按 `summarizeToolArgs` 的 `<path> · <元信息>` 切分，
+ * 避免用粗正则误把 `src/foo.bar/baz.ts` 中的带点目录段 `foo.bar` 当成独立改动文件。
+ */
+function extractWriteOrEditPath(event: any): string | null {
+  if (typeof event?.filePath === 'string' && event.filePath.trim()) {
+    return event.filePath.trim()
+  }
+  const rawArgs = event?.args
+  if (rawArgs && typeof rawArgs === 'object') {
+    for (const key of ['path', 'file_path', 'filePath', 'target']) {
+      const value = (rawArgs as Record<string, unknown>)[key]
+      if (typeof value === 'string' && value.trim()) return value.trim()
+    }
+  }
+  const summary = typeof event?.argsSummary === 'string' ? event.argsSummary.trim() : ''
+  if (!summary) return null
+  if (summary.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(summary) as Record<string, unknown>
+      for (const key of ['path', 'file_path', 'filePath', 'target']) {
+        const value = parsed[key]
+        if (typeof value === 'string' && value.trim()) return value.trim()
+      }
+    } catch {
+      const keyMatch = /"(?:path|file_path|filePath|target)"\s*:\s*"((?:\\.|[^"\\])+)"/.exec(summary)
+      if (keyMatch) {
+        try {
+          const decoded = JSON.parse(`"${keyMatch[1]}"`)
+          if (typeof decoded === 'string' && decoded.trim()) return decoded.trim()
+        } catch {
+          return keyMatch[1].trim()
+        }
+      }
+    }
+    return null
+  }
+  if (summary.startsWith('·')) return null
+  const head = summary.split(/\s+·\s+/)[0]?.trim() ?? ''
+  const unquoted = head.replace(/^['"]|['"]$/g, '').trim()
+  if (!unquoted || unquoted.startsWith('·') || /[\r\n]/.test(unquoted)) return null
+  return unquoted
+}
+
+/** 给测试用的纯函数版本（压缩参数写入、porcelain 解析与工具路径提取） */
+export const taskRunnerInternals = {
+  ensureTaskAgentSettings,
+  TASK_COMPACTION_SETTINGS,
+  parsePorcelainChangedFiles,
+  extractWriteOrEditPath,
+  serializeApiOverrides,
+}
 
 function normalizeCloudPath(value: string): string {
   return value.replace(/\\/g, '/').replace(/^"|"$/g, '')

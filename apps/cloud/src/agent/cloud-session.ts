@@ -58,6 +58,8 @@ export interface CloudSessionDeps {
   now?: () => number
   /** 流式增量合帧窗口（毫秒，默认 50ms）；测试可显式调整 */
   traceFlushMs?: number
+  /** 工单事件唤醒节流窗口（毫秒，默认 2000ms）；测试可显式调整 */
+  eventThrottleMs?: number
 }
 
 interface PendingEvent {
@@ -72,6 +74,7 @@ export class CloudSession {
   private streamingText = ''
   private pending = new Map<string, PendingEvent>()
   private flushTimer: NodeJS.Timeout | null = null
+  private flushFailureCount = 0
   private error: string | undefined
   private readonly traceCoalescer: StreamCoalescer<AgentTraceEvent>
 
@@ -260,7 +263,7 @@ export class CloudSession {
     this.scheduleFlush()
   }
 
-  private scheduleFlush(delayMs = CLOUD_EVENT_THROTTLE_MS): void {
+  private scheduleFlush(delayMs = this.deps.eventThrottleMs ?? CLOUD_EVENT_THROTTLE_MS): void {
     if (this.flushTimer) return
     this.flushTimer = setTimeout(() => {
       this.flushTimer = null
@@ -271,21 +274,23 @@ export class CloudSession {
 
   private async flushEvents(): Promise<void> {
     if (this.pending.size === 0) return
+    const baseThrottleMs = this.deps.eventThrottleMs ?? CLOUD_EVENT_THROTTLE_MS
     if (this.deps.ready) {
       const ok = await this.deps.ready()
       if (!ok) {
         // 运行时暂不可用（重建窗口或暂未就绪）时必须重排定时器，绝不让 pending 事件永久搁浅
-        this.scheduleFlush(CLOUD_EVENT_THROTTLE_MS * 2)
+        this.scheduleFlush(baseThrottleMs * 2)
         return
       }
     }
     const sessionId = this.sessionId
     if (!sessionId || this.pending.size === 0) {
-      if (!sessionId && this.pending.size > 0) this.scheduleFlush(CLOUD_EVENT_THROTTLE_MS * 2)
+      if (!sessionId && this.pending.size > 0) this.scheduleFlush(baseThrottleMs * 2)
       return
     }
-    const events = [...this.pending.values()]
+    const entries = [...this.pending.entries()]
     this.pending.clear()
+    const events = entries.map(([, item]) => item)
 
     const busy = this.deps.agent.isSessionBusy(sessionId)
     // 多条事件合并成一条 custom message：保留最高优先级 kind，完整汇聚 changedFiles 与 secretHits
@@ -312,15 +317,49 @@ export class CloudSession {
       ...(mergedSecretHits.length > 0 ? { secretHits: mergedSecretHits } : {}),
     }
     const message = buildTaskEventMessage(merged)
-    const result = await this.deps.agent.sendCustomMessage(sessionId, message, {
-      triggerTurn: true,
-      deliverAs: 'followUp',
-    })
-    if (!result.success) {
-      this.deps.logger.warn('[cloud] failed to wake the cloud session:', result.error)
-      return
+    // 必须在 await sendCustomMessage 之前进入 thinking：否则轮次可能在 await 返回前已 settle，
+    // 后置 beginTurn() 会把已结束的会话永久卡死在 thinking 状态
+    const startedTurn = !busy
+    if (startedTurn) this.beginTurn()
+
+    let failedError: unknown = null
+    let succeeded = false
+    try {
+      const result = await this.deps.agent.sendCustomMessage(sessionId, message, {
+        triggerTurn: true,
+        deliverAs: 'followUp',
+      })
+      if (result.success) {
+        succeeded = true
+        this.flushFailureCount = 0
+      } else {
+        failedError = result.error ?? 'sendCustomMessage returned success=false'
+      }
+    } catch (error) {
+      failedError = error
     }
-    if (!busy) this.beginTurn()
+
+    if (!succeeded) {
+      this.deps.logger.warn('[cloud] failed to wake the cloud session:', failedError)
+      if (startedTurn && this.status === 'thinking') {
+        this.endTurn('error')
+      }
+      // 将未送达事件放回 pending，不覆盖期间新到达的同 key 事件（合并保留两者信息）
+      for (const [key, item] of entries) {
+        const newer = this.pending.get(key)
+        if (!newer) {
+          this.pending.set(key, item)
+        } else {
+          this.pending.set(key, {
+            payload: mergeTaskEventPayloads(item.payload, newer.payload),
+            at: newer.at,
+          })
+        }
+      }
+      this.flushFailureCount = Math.min(this.flushFailureCount + 1, 5)
+      const backoffMs = Math.min(baseThrottleMs * 2 ** this.flushFailureCount, 60_000)
+      this.scheduleFlush(backoffMs)
+    }
   }
 
   /** SDK `agent_settled` 钩子：收尾事件唤醒轮次的流式消息并复位状态 */

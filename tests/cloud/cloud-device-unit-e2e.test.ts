@@ -165,6 +165,7 @@ beforeAll(async () => {
       cookieSecret: 'unit-e2e-secret',
       secureCookies: false,
       version: 'e2e',
+      worktreeReclaimDelayMs: 120,
     },
     // 本测试不推云端配置；探测替身只是防止误打外网
     { probeConfig: async () => ({ ok: true }) }

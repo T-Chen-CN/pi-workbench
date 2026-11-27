@@ -210,3 +210,112 @@ describe('云端流式合帧与思考过程投影', () => {
     ])
   })
 })
+
+describe('事件唤醒 flushEvents 健壮性（Bug 1）', () => {
+  it('sendCustomMessage 内部提前 settle 时不会把会话永久卡在 thinking', async () => {
+    const published: any[] = []
+    let sessionRef: CloudSession | null = null
+    const session = new CloudSession({
+      agent: {
+        isSessionBusy: () => false,
+        sendCustomMessage: async () => {
+          // 模拟轮次在 sendCustomMessage 返回前就已经 settle
+          sessionRef?.onSettled()
+          return { success: true }
+        },
+      } as any,
+      hub: { publish: (frame: any) => published.push(frame) } as any,
+      store: { getCloudConfig: () => null } as any,
+      dispatcher: {} as any,
+      logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+      now: () => 1000,
+      eventThrottleMs: 10,
+    })
+    sessionRef = session
+    ;(session as unknown as { sessionId: string | null }).sessionId = 'sess-wake'
+
+    session.wake({
+      eventId: 'evt-1',
+      kind: 'done',
+      taskId: 'T-1',
+      deviceId: 'dev-1',
+      at: 1000,
+      summary: 'task done',
+    })
+    await new Promise((resolve) => setTimeout(resolve, 60))
+
+    expect(session.runtimeState().status).toBe('idle')
+    const statusFrames = published.filter((f) => f.type === 'cloud_status').map((f) => f.status)
+    // 必须先 thinking 后 idle，绝不能在 idle 之后再发 thinking
+    expect(statusFrames).toEqual(['thinking', 'idle'])
+  })
+
+  it('sendCustomMessage 失败或抛错时恢复状态为 error、回填事件并按退避重试（不覆盖新事件）', async () => {
+    const published: any[] = []
+    const deliveredMessages: string[] = []
+    let attempts = 0
+    let sessionRef: CloudSession | null = null
+
+    const session = new CloudSession({
+      agent: {
+        isSessionBusy: () => false,
+        sendCustomMessage: async (_sid: string, msg: { content: string }) => {
+          attempts += 1
+          if (attempts === 1) {
+            // 在首次失败期间同 taskId 到达更新的 done 事件，不能被回填的旧事件覆盖
+            sessionRef?.wake({
+              eventId: 'evt-new',
+              kind: 'done',
+              taskId: 'T-1',
+              deviceId: 'dev-1',
+              at: 1002,
+              summary: 'final done',
+              status: 'done',
+            })
+            throw new Error('temporary failure')
+          }
+          deliveredMessages.push(msg.content)
+          sessionRef?.onSettled()
+          return { success: true }
+        },
+      } as any,
+      hub: { publish: (frame: any) => published.push(frame) } as any,
+      store: { getCloudConfig: () => null } as any,
+      dispatcher: {} as any,
+      logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+      now: () => 1000,
+      eventThrottleMs: 15,
+    })
+    sessionRef = session
+    ;(session as unknown as { sessionId: string | null }).sessionId = 'sess-retry'
+
+    session.wake({
+      eventId: 'evt-old',
+      kind: 'milestone',
+      taskId: 'T-1',
+      deviceId: 'dev-1',
+      at: 1000,
+      summary: 'step 1',
+    })
+    session.wake({
+      eventId: 'evt-other',
+      kind: 'done',
+      taskId: 'T-2',
+      deviceId: 'dev-1',
+      at: 1001,
+      summary: 'T-2 done',
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 140))
+
+    expect(attempts).toBe(2)
+    expect(deliveredMessages).toHaveLength(1)
+    expect(deliveredMessages[0]).toContain('final done')
+    expect(deliveredMessages[0]).toContain('T-2 done')
+    expect(session.runtimeState().status).toBe('idle')
+    // 第一次失败时必须先退出 thinking 进入 error，而不是卡在 thinking
+    const statusFrames = published.filter((f) => f.type === 'cloud_status').map((f) => f.status)
+    expect(statusFrames).toContain('error')
+    expect(statusFrames[statusFrames.length - 1]).toBe('idle')
+  })
+})
