@@ -25,6 +25,7 @@
 | P-03 | 供应商预设的真实凭证手工验收（发布前必做） | P1 | ⬜ 未做（清单见 [provider-presets §11.2](../architecture/provider-presets.md)）：8 家 × api_key 各一次；4 条 OAuth（含验证 `openai` 粘贴回调 `client_id` 换 token 与各家订阅策略）；下调上下文/输出上限在**轮次边界**生效且不打断；换模型档位自动降级；会话模型回落不弹提示；云端配置页 Key 只回掩码 |
 | S-01 | 工作区级 `.pi/extensions` / `.pi/settings.json` 显式信任机制 | P2 | ⬜ 未做：阶段 0 已默认以 `projectTrusted: false` + `noExtensions: true` 封堵打开不可信仓库即执行扩展的 RCE 风险；后续按需评估是否增加类似 VS Code Workspace Trust 的按工作区显式弹窗授权与持久化信任开关 |
 | D-02 | 托管工作树存放位置（仓库内 `.pi-workbench/worktrees/` vs 仓库外独立缓存目录） | P2 | ⬜ 待单独讨论：暂保持 `.pi-workbench/worktrees/` 不变（兼顾项目所在盘空间与直观查找）；后续按需评估是否开放目录选项 |
+| F-01 | Phase F：远端工单可选 OS/Docker 沙箱默认策略 & MCP 配置范围 | P2 | ⬜ 待单独讨论：按所有者要求留待 Phase E 之后再评估默认沙箱形态与 MCP 接入边界 |
 | V-01 | macOS 手动验收（universal dmg） | 发布前 | ⬜ 未做 |
 | V-02 | Linux 手动验收（AppImage） | 发布前 | ⬜ 未做 |
 
@@ -33,6 +34,8 @@
 **2026-11-26 发版不阻塞记录（0.11.0 桌面端）**：R-23（输出截断的 B4/B7/`reasoning_effort` 联动，与本次配置链路改动无关，B8 标题预算已同版完成）· P-02（云端 OAuth 未做，云端继续用 API Key 配置，协议无变化）· C-01（云端真派活走查，需真实 Key，且生产补丁待部署）· C-03 / C-06（云端 P1 功能簇，桌面端不依赖）。P-03 保留 P1 并作为本次发版的冒烟项，**发布时未执行**，需在下一个版本前补上。
 
 ### 已交付（只留一行，细节在 git）
+
+- 2026-11-28 **Phase A–E 全面架构升级与 59 项纯 Bug 修复**：完成 59 项纯代码 Bug 修复（5 commits）；完成 Phase A（安全边界与自动缓存清理、云端首启口令/SQLite 关系化与记忆入库、锁全量传递依赖不可变发布）、Phase B（Cloud Web 减重至 8.11 MiB + br/gzip、后台工作区休眠不中断 Agent、面板宽度持久化、错误 Toast 8s 暂停与 Paper & Ink `≥ 12px`）、Phase C（`fflate`+`saxes`、`https/socks-proxy-agent`、`chokidar` v4、Monaco `createDiffEditor`+`fast-diff`、`web-tree-sitter`、`@base-ui/react`+`@floating-ui/react`+`cmdk` 6 大替换）、Phase D（Zustand v5、`@pi-workbench/{ui,i18n,cloud-ui}` 统一与 Cloud Web 英文支持、单源 Typed IPC、`AgentManager`/`ChatPanel` 拆解、`eslint --max-warnings 0` 与 Playwright `_electron` 冒烟 E2E）及 Phase E（Agent 与插件 `utilityProcess` 进程隔离 + 直连 `MessagePort`、原生多 `BrowserWindow` 拆窗与 Q5 托盘/回位语义，修订 ADR-001）；199 文件 2,062 单测与本地/打包版 Electron E2E 全绿。
 
 - 2026-11-27 **D-01 严格两目录模型 + Windows 安装版/便携版双发行包**：三平台打包版统一采用「程序安装目录 + 唯一数据目录 `<appData>/pi-workbench`」（更新缓存同步收口到 `{dataDir}/cache/pi-workbench-updater/`，彻底消除 `%LOCALAPPDATA%` 第 3 目录）；新增旧版安装目录同步无损迁移（`migrateLegacyInstallDirSync`）与设置页「打开数据目录」（`app:openDataDir`）；`build/installer.nsh` 瘦身移除 244 行清单卸载脚本与 `afterPack` manifest 脚本；新增 `scripts/build-win-portable.mjs` 与 `release.yml` Windows 便携 `.zip`（根级 `portable` 标记，引导手动更新不跑 NSIS）并修正 `release.yml` 构建测试顺序。
 - 2026-11-27 **Phase 0–2 深度审计整改与架构演进（安全止血 + 前端/云端瘦身 + 架构与工程治理升级）**：完成全仓 12 项 P0 安全封堵与数据防丢修复；完成云端 `node:sqlite` (WAL) 持久化迁移、`packages/cloud-ui` 共享包抽离与前端/产物瘦身；完成 Phase 2 全部既定里程碑——剩余并发/插件哈希/云端记忆与梦境回滚加固、`electron/documents/*` 与 `repo-map.ts` 迁入 `worker_threads` + 热路径异步化、`AgentManager` 按域拆分 + `pi-bridge/src/session-view.ts` 单一聊天渲染投影（持久化 `entryId` + 轮末自愈 + 多步聚合 `usage`）、高危 IPC 与云端 WS 协议 Zod 校验与能力协商、Windows/Linux 原生 `titleBarOverlay`（恢复 Win11 Snap Layouts）+ 取消 1 秒启动形变 + `prefers-reduced-motion` + A11y / `RepoMapCanvas` / 前端虚拟化优化、ESLint `jsx-a11y` + 跨包边界 + AST 色值门禁、全仓 `src/components/`（10 域）与 `tests/`（6 域）按业务域重组，以及 `DESIGN_SYSTEM.md` 瘦身与文档同步（便携目录 `D-01` 与托管工作树位置 `D-02` 按所有者要求保留待单独讨论）。
@@ -65,4 +68,4 @@
 ---
 
 **维护者**: Pi Workbench Team
-**最后更新**: 2026-11-27
+**最后更新**: 2026-11-28

@@ -2,7 +2,7 @@
 
 > **审查日期**：2026-11-28
 > **审查基线**：`0.11.2+`（Phase 0–2 深度整改与全局清理后的 `main` 主干，全仓 583 个受控文件）
-> **修复进度（2026-11-28）**：报告中全部 **59 项纯代码 Bug** 已按确认方案（`1.B / 2.A / 3.A / 4.A / 5.A / 6.A`）全部修复落地，并补齐 5 个专项回归测试文件（全仓 7 份 `type-check`、`lint`、`npm test` **183 文件 / 1,906 用例**、`npm run build`、`npm run build:cloud` 全绿）。其余架构演进、设计系统与工具链/发布优化项留待后续按需排期。
+> **整改完成状态（2026-11-28）**：报告中全部 **59 项纯代码 Bug**（`8fd5ec1`..`cdd1a28`）以及全部已批准的 **Phase A–E 架构升级与整改**（17 个按模块本地提交 `51f7c99`..`788e379`）已全部落地并通过全仓验收（9 份 `type-check`、`eslint . --max-warnings 0`、`npm test` **199 文件 / 2,062 用例**、`npm run build`、`npm run build:cloud`、`electron-builder --win --dir --publish never`、本地构建与打包版 `Pi Workbench.exe` Playwright `_electron` 多窗冒烟 E2E 全绿）。**Phase F（远端工单可选 OS/Docker 沙箱默认策略 & MCP 配置范围）**按所有者要求暂缓，留待单独讨论。
 > **审查范围**：`electron/`、`pi-bridge/`、`apps/cloud/`、`packages/cloud-ui/`、`src/`、`tests/`、`build/`、`scripts/`、`.github/workflows/`、全部配置文件、设计系统与规则约束文档（`AGENTS.md` / `DESIGN_SYSTEM.md` / ADRs）
 > **审查原则**：不预设现有规则与文档为正确前提，逐行验证代码实现、安全边界、并发状态机、渲染性能、产物体积、测试有效性与规则合理性，并对照 2025–2026 社区与业界主流方案。
 
