@@ -1085,8 +1085,6 @@ export function useChatPanelState(props: ChatPanelProps) {
           emitAppEvent('pi:refresh-files')
           toast.info(t('agentModifiedFiles', { count: result.edits.length }))
         }
-        // 重新生成会产生新的回复分支（R-03）
-        void refreshBranches(sessionId)
         // trace 丢失时用结果里的计划兜底（R-04）
         if (result.plan) {
           useChatStore.getState().appendPlanPart(key, assistantId, result.plan)
@@ -1126,6 +1124,25 @@ export function useChatPanelState(props: ChatPanelProps) {
           useSessionStore.getState().markError(workspacePath, sessionId, errorMessage)
           chat.finishStreamingMessage(key, assistantId)
         }
+        // 失败/截断/中止轮次前已落盘的文件修改与用量不能丢弃，仍须展示并通知文件树刷新
+        if (result.usage) chat.setMessageUsage(key, assistantId, result.usage)
+        if (result.edits && result.edits.length > 0) {
+          chat.setMessageEdits(key, assistantId, result.edits)
+          emitAppEvent('pi:refresh-files')
+        }
+      }
+      // 轮末以磁盘会话记录（deriveMessages）为单一真相源对账：统一插话位置、context_edit、
+      // 多步 usage、压缩点与持久化 entryId，随后再按 entryId 刷新分支分组
+      if (!abortedByCompaction) {
+        try {
+          const synced = await piAgentAPI.sessionsOpen(workspacePath, sessionId)
+          if (synced.success && Array.isArray(synced.history) && synced.history.length > 0) {
+            useChatStore.getState().reconcileMessages(key, synced.history)
+          }
+        } catch {
+          // 离线/测试替身未实现 sessionsOpen 时保持实时渲染结果
+        }
+        void refreshBranches(sessionId)
       }
     } catch (err) {
       traceBuffer.flush()

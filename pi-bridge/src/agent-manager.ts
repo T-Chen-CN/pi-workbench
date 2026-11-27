@@ -13,16 +13,14 @@ import {
   ModelRuntime,
   SessionManager,
   SettingsManager,
-  type AgentSession,
   type ExtensionFactory,
-  type ResourceLoader,
   type SessionEntry,
   type ToolDefinition,
 } from '@earendil-works/pi-coding-agent'
 import type { Api, Model, ThinkingLevel } from '@earendil-works/pi-ai'
 import * as path from 'path'
 import * as fs from 'fs/promises'
-import { existsSync, readFileSync, statSync } from 'fs'
+import { existsSync } from 'fs'
 import {
   DEFAULT_PERMISSION_LEVEL,
   isPermissionLevel,
@@ -40,32 +38,10 @@ import {
   type PlanStatus,
   type StructuredPlan,
 } from './plan.js'
-
-export type { PlanStep, PlanStepStatus, PlanStatus, StructuredPlan }
-
-const AGENT_SHELL_SENSITIVE_KEYS = new Set([
-  'PI_WORKBENCH_API_KEY',
-  'ANTHROPIC_API_KEY',
-  'OPENAI_API_KEY',
-])
-const AGENT_SHELL_SENSITIVE_PREFIXES = ['PI_WORKBENCH_']
-
-/** 清洗 Agent 派生 shell 子进程的敏感环境变量（Windows 大小写不敏感），防止联网搜索 Key 经 bash 暴露 */
-export function sanitizeAgentShellEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const sanitized: NodeJS.ProcessEnv = {}
-  for (const [key, value] of Object.entries(env)) {
-    const upper = key.toUpperCase()
-    if (AGENT_SHELL_SENSITIVE_KEYS.has(upper)) continue
-    if (AGENT_SHELL_SENSITIVE_PREFIXES.some((prefix) => upper.startsWith(prefix))) continue
-    sanitized[key] = value
-  }
-  return sanitized
-}
 import {
   SessionExtrasStore,
   emptyExtras,
   isSafeSessionId,
-  type SessionExtras,
 } from './session-extras.js'
 import {
   CONTEXT_BLOCK_END,
@@ -73,8 +49,6 @@ import {
   messageText as toMessageText,
   parseContextBlock,
   stripContextBlock,
-  summarizeToolArgs,
-  summarizeToolResult,
   wrapPlanPrompt,
 } from './text-utils.js'
 import {
@@ -85,34 +59,18 @@ import {
 import {
   IMAGE_ONLY_PROMPTS,
   buildExportTurns,
-  extractMessageText,
-  extractTitleSourceTexts,
 } from './agent-projections.js'
 import { validateChatImages } from './chat-images.js'
 import {
-  THINKING_LEVELS,
   computeCompactionThresholds,
   writeCompactionSettings,
   writeModelsConfig,
 } from './model-config.js'
 import { ensureBashOnPath } from './environment.js'
-import {
-  PRESET_PROVIDER_IDS,
-  builtinCatalogModels,
-  catalogLimits,
-  diffCatalogSnapshots,
-  filterEffectiveCatalogModels,
-  type ModelLimits,
-} from './provider-presets.js'
-import type { CatalogSnapshot } from './models-store.js'
-import {
-  buildTitlePrompt,
-  isEchoOfUserText,
-  parseTitleResponse,
-  requestSessionTitle,
-} from './session-title.js'
-import { buildSessionMessagesFromEntries } from './session-history.js'
-import { activeTimeline, entryTimestamp } from './session-entries.js'
+import { type ModelLimits } from './provider-presets.js'
+import { AgentCatalogService } from './agent-catalog.js'
+import { deriveMessages } from './session-view.js'
+import { activeTimeline } from './session-entries.js'
 import {
   describeToolResult,
   findToolResultPayload,
@@ -135,9 +93,7 @@ import type {
   AgentLogger,
   AgentMessage,
   AgentTraceEvent,
-  AgentUsage,
   ConversationBranchGroup,
-  FileEdit,
   MessageContext,
   ModelCapabilityInfo,
   PromptTemplateInfo,
@@ -149,15 +105,36 @@ import type {
 import { withTimeout, withTimeoutResult } from './async-utils.js'
 import { StallWatchdog } from './stall-watchdog.js'
 import { createReadWithDocumentsDefinition } from './read-with-documents.js'
+import {
+  ABORT_GRACE_MS,
+  ABORT_TIMEOUT_MS,
+  APPROVAL_TIMEOUT_MS,
+  EXTRAS_SAVE_TIMEOUT_MS,
+  INIT_TIMEOUT_MS,
+  STALL_TIMEOUT_MS,
+  aggregateTurnUsage,
+  collectRunAssistants,
+  consoleAgentLogger,
+  effectiveLimits,
+  resolveToolFilePath,
+  sanitizeAgentShellEnv,
+  stallErrorMessage,
+  thinkingLevelsOf,
+  type SessionRuntime,
+} from './agent-runtime-types.js'
+import {
+  resolveCompactionEntry as resolveBranchCompactionEntry,
+  subscribeSessionEvents,
+} from './agent-session-events.js'
+import { AgentTitleService } from './agent-title-service.js'
 
-/** 未注入 logger 时保持原有 console 行为 */
-const consoleAgentLogger: AgentLogger = {
-  info: (...args) => console.log(...args),
-  warn: (...args) => console.warn(...args),
-  error: (...args) => console.error(...args),
-  debug: (...args) => console.debug(...args),
+export type { PlanStep, PlanStepStatus, PlanStatus, StructuredPlan }
+export {
+  ABORT_GRACE_MS,
+  APPROVAL_TIMEOUT_MS,
+  STALL_TIMEOUT_MS,
+  sanitizeAgentShellEnv,
 }
-
 export type {
   AgentChatOptions,
   AgentChatResult,
@@ -181,130 +158,7 @@ export type {
   SkillInfo,
   ToolResultMeta,
 } from './types.js'
-
-/** 模型响应空闲超时（毫秒）：连续这么久没有任何模型增量才判定卡死；不设整轮上限 */
-export const STALL_TIMEOUT_MS = 180_000
-/** abort 之后等待 SDK 收尾的宽限期；超过后强制结束本轮，防止永久挂起 */
-export const ABORT_GRACE_MS = 10_000
-/** 调用 session.abort() 本身的等待上限，避免 dispose / 重启被卡住 */
-const ABORT_TIMEOUT_MS = 5_000
-/** dispose 时等 extras 落盘的上限：退出流程不能被写盘卡死 */
-const EXTRAS_SAVE_TIMEOUT_MS = 1_000
-/** 初始化（模型运行时 + 会话创建）超时 */
-const INIT_TIMEOUT_MS = 30_000
-
-/**
- * 模型的生效容量。`models.json` 的 `modelOverrides` 已被 SDK 应用，
- * 这里只做最后一道夹取（输出上限不得超过上下文窗口）。
- */
-function effectiveLimits(model: { contextWindow?: number; maxTokens?: number }): ModelLimits {
-  return catalogLimits(model)
-}
-
-/**
- * 模型支持的思考档位。`thinkingLevelMap` 里值为 null 表示该档不支持；
- * 整张表缺失时视为全部档位可用（老模型条目没有这张表）。
- */
-function thinkingLevelsOf(model: { thinkingLevelMap?: Record<string, unknown> }): string[] {
-  const map = model.thinkingLevelMap
-  if (!map) return [...THINKING_LEVELS]
-  // pi-ai 稀疏表语义：只有显式 null 表示该档禁用，缺失键视为沿用默认支持
-  return THINKING_LEVELS.filter((level) => map[level] !== null).map(String)
-}
-/** 单次工具审批的等待上限；超时按拒绝处理（fail-closed） */
-export const APPROVAL_TIMEOUT_MS = 120_000
-
-/** 空闲超时的统一错误文案（渲染层直接展示） */
-function stallErrorMessage(): string {
-  return `Agent response stalled: no output for ${Math.round(STALL_TIMEOUT_MS / 1000)}s.`
-}
-
-/** 消息上的毫秒时间戳；测试夹具或老数据可能没有 */
-function messageTimestamp(message: any): number | null {
-  const value = message?.timestamp
-  return typeof value === 'number' && Number.isFinite(value) ? value : null
-}
-
-/**
- * 找本轮新增的最后一条 assistant 消息。
- *
- * 常规路径按数组下标判定（session.messages 只在末尾追加）。但自动压缩、溢出恢复
- * 与上下文编辑都会调用 SDK 的 _refreshFinalizedContext()，用会话投影重建整个数组，
- * 把旧前缀折叠成摘要：下标基准整体前移，messages.length 甚至可能小于 startIndex，
- * 只按下标扫描会误判成「本轮没有回复」。因此补一条时间戳兜底——消息自带
- * timestamp（毫秒），本轮之后产生的消息一定 >= startedAt。
- */
-function findRunAssistant(messages: any[], startIndex: number, startedAt: number): any | null {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i]
-    if (message?.role !== 'assistant') continue
-    const timestamp = messageTimestamp(message)
-    if (timestamp === null) {
-      // 没有时间戳的消息无法参与时间判定，退回下标
-      if (i >= startIndex) return message
-      continue
-    }
-    if (timestamp >= startedAt) return message
-  }
-  return null
-}
-
-/** 标题结果不可用（空回复 / 纯推理）时的重试上限：超过就永久保留回退标题 */
-const TITLE_MAX_FAILURES = 3
-/** 单次编辑 diff 快照的最大读取字节数（超过则跳过快照，防止大文件同步读盘阻塞/OOM） */
-const MAX_EDIT_SNAPSHOT_BYTES = 2 * 1024 * 1024
-
 export type { SessionMode }
-
-interface SessionRuntime {
-  id: string
-  sessionManager: SessionManager
-  session: AgentSession
-  /** 提示模板 / 技能等资源的加载器（R-13） */
-  resourceLoader: ResourceLoader | null
-  unsubscribe: (() => void) | null
-  isProcessing: boolean
-  onTextDelta: ((delta: string) => void) | null
-  /** 逐轮 trace 回调：只在 `chat()` 期间有效 */
-  turnTrace: ((event: AgentTraceEvent) => void) | null
-  /** 跨轮常驻订阅（事件唤醒的轮次没有 `chat()` 调用，只能靠它拿到流式事件） */
-  traceSinks: Set<(event: AgentTraceEvent) => void>
-  /** 统一分发入口：turnTrace + traceSinks。始终非空，plan 扩展也经由它上报 */
-  onTrace: (event: AgentTraceEvent) => void
-  /** 本轮的空闲超时看门狗；工具执行与审批等待期间自动挂起 */
-  watchdog: StallWatchdog | null
-  /** 事件唤醒轮次（sendCustomMessage triggerTurn）由 SDK 事件维护的运行态与后台看门狗 */
-  sdkStreaming: boolean
-  bgWatchdog: StallWatchdog | null
-  /** 当前 assistant 消息中已经收到过增量的 thinking 块 */
-  thinkingDeltaSeen: Set<number>
-  /** write/edit 工具开始时的目标路径，供 tool_end 附带 */
-  toolFiles: Map<string, string>
-  editSnapshots: Map<string, { path: string; oldContent: string; existed: boolean }>
-  pendingEdits: FileEdit[]
-  messageHistory: AgentMessage[]
-  createdAt: number
-  updatedAt: number
-  /** 自动标题只尝试一次 */
-  titleAttempted: boolean
-  /** 模型返回不可用结果（空回复 / 纯推理）的次数；超过上限就不再重试 */
-  titleFailures: number
-  /** 未落盘新会话的临时标题 */
-  pendingTitle: string | null
-  /** 会话注册的全部工具；模式在此之上计算激活集，不受历史影响 */
-  registeredTools: string[]
-  /** 会话附加数据（思考时长 / 历史工具 Diff） */
-  extras: SessionExtras
-  extrasSave: Promise<void>
-  thinkingStart: number | null
-  thinkingDurationsThisMessage: number[]
-  /** 最近一次已转发的 compaction entry id，用于 compaction_end 去重取锚点 */
-  lastCompactionEntryId: string | null
-  /** 最近一次已落盘的 compaction entry 元信息，供手动压缩返回稳定锚点 */
-  lastCompactionEntry: { id: string; timestamp?: number; tokensBefore?: number } | null
-  /** 正在进行的手动压缩 Promise；并发 chat() 必须等待其结束再决定继续或终止 */
-  compactingPromise: Promise<{ success: boolean; error?: string }> | null
-}
 
 /**
  * Agent Manager 类
@@ -330,103 +184,53 @@ export class AgentManager {
   private rebindingPromises = new Map<string, Promise<boolean>>()
   /** sessionId → 正在创建的运行时：并发打开同一个会话时共用一次创建 */
   private creatingRuntimes = new Map<string, Promise<SessionRuntime>>()
-  /** sessionId → 已确定的标题：跨运行时重建仍然有效，只有手动重命名能改写 */
-  private settledTitles = new Map<string, string>()
+  /** 会话标题服务（生成、确定态、跨运行时补写） */
+  private readonly titleService = new AgentTitleService({
+    getConfig: () => this.config,
+    getModelRuntime: () => this.modelRuntime,
+    getLogger: () => this.logger,
+    getSessionDir: () => this.sessionDir,
+    getExtrasStore: () => this.extrasStore,
+    getLiveRuntime: (id) => this.runtimes.get(id),
+    isDeleted: (id) => this.deletedSessions.has(id),
+    findSessionFile: (id) => this.findSessionFile(id),
+    resolveSessionModel: (runtime) => this.resolveSessionModel(runtime),
+    persistExtras: (runtime) => this.persistExtras(runtime),
+  })
   /** 已删除的会话：在途的标题结果不得再把 sidecar / 记录写回来 */
   private deletedSessions = new Set<string>()
   /** 上一次创建会话时使用的联网配置版本 */
   private lastWebAccessVersion: string | null = null
   /** 新建会话的权限种子（G3）：只在 extras 还没有权限时生效，已有会话以落盘为准 */
   private seedPermissions = new Map<string, SessionPermission>()
-  /** 当前 provider 的远端目录快照（D12/D26）：用于过滤内置快照里上游已下架的模型 */
-  private remoteCatalogSnapshot: CatalogSnapshot | undefined = undefined
+  /** 模型目录与能力服务 */
+  private readonly catalogService = new AgentCatalogService({
+    getConfig: () => this.config,
+    getModelRuntime: () => this.modelRuntime,
+    getLogger: () => this.logger,
+  })
   /** dispose 标记：防止在途 createRuntime 在 dispose() 后回插僵尸会话 */
   private disposed = false
 
-  private async syncRemoteCatalogSnapshot(providerId: string): Promise<void> {
-    const store = this.config?.modelsStore
-    if (!store || !('snapshotFor' in store) || typeof store.snapshotFor !== 'function') {
-      this.remoteCatalogSnapshot = undefined
-      return
-    }
-    try {
-      this.remoteCatalogSnapshot = await (
-        store as { snapshotFor(id: string): Promise<CatalogSnapshot | undefined> }
-      ).snapshotFor(providerId)
-    } catch {
-      this.remoteCatalogSnapshot = undefined
-    }
+  private syncRemoteCatalogSnapshot(providerId: string): Promise<void> {
+    return this.catalogService.syncRemoteCatalogSnapshot(providerId)
   }
 
-  /**
-   * 目录里的模型列表。优先用运行时的（含远端增量与 models.json 覆盖），
-   * 并按生效的远端快照剔除上游已下架的内置残留（D12/D26）；
-   * 运行时没暴露 `getModels`（测试替身 / 老版本）时回退内置快照。
-   */
   private catalogModels(): Model<Api>[] {
-    const providerId = this.config?.apiConfig.providerId
-    if (!providerId) return []
-    const runtime = this.modelRuntime as (ModelRuntime & { getModels?: (id: string) => readonly Model<Api>[] }) | null
-    const fromRuntime = runtime?.getModels?.(providerId)
-    const raw = fromRuntime && fromRuntime.length > 0 ? fromRuntime : builtinCatalogModels(providerId)
-    return filterEffectiveCatalogModels(raw, this.remoteCatalogSnapshot)
+    return this.catalogService.catalogModels()
   }
 
-  /** 解析会话当前生效的模型（优先会话已切换模型 + modelRuntime 覆盖，回退工作区默认模型） */
   private resolveSessionModel(runtime?: SessionRuntime): Model<Api> | undefined {
-    const sessionModel = runtime?.session?.model as Model<Api> | undefined
-    if (sessionModel?.provider && sessionModel?.id) {
-      return this.modelRuntime?.getModel(sessionModel.provider, sessionModel.id) ?? sessionModel
-    }
-    return this.resolveActiveModel()
+    return this.catalogService.resolveSessionModel(runtime)
   }
 
-  /** 当前生效的输出上限，用于截断报错；优先读会话自身已切换的模型 */
   private outputLimit(runtime?: SessionRuntime): number {
-    const model = this.resolveSessionModel(runtime)
-    if (!model) return 0
-    return effectiveLimits(model).maxTokens
-  }
-
-  /** 从 assistant 消息中提取 usage（Pi 保证 assistant 消息带 usage） */
-  private readUsage(message: any): AgentUsage | undefined {
-    const raw = message?.usage
-    if (!raw || typeof raw !== 'object') return undefined
-    const value = (input: unknown): number =>
-      typeof input === 'number' && Number.isFinite(input) ? input : 0
-    return {
-      input: value(raw.input),
-      output: value(raw.output),
-      reasoning: value(raw.reasoning),
-      cacheRead: value(raw.cacheRead),
-      cacheWrite: value(raw.cacheWrite),
-      totalTokens: value(raw.totalTokens),
-      cost: value(raw.cost?.total),
-    }
-  }
-
-  /** 把工具参数里的路径解析为绝对路径 */
-  private resolveToolPath(toolPath: unknown, root?: string): string | null {
-    if (typeof toolPath !== 'string' || !toolPath) return null
-    return path.isAbsolute(toolPath)
-      ? toolPath
-      : path.resolve(root ?? this.config?.workspaceDir ?? process.cwd(), toolPath)
-  }
-
-  /** 工具路径是否位于会话根目录内（工单会话的根是独立 repo worktree，不是 workspaceDir） */
-  private isInsideWorkspace(targetPath: string, root?: string): boolean {
-    const base = root ?? this.config?.workspaceDir
-    if (!base) return false
-    const relative = path.relative(path.resolve(base), path.resolve(targetPath))
-    return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
+    return this.catalogService.outputLimit(runtime)
   }
 
   /** write/edit 的工具行可附带文件路径；其他工具不暴露文件 */
   private toolFilePath(toolName: string, args: any, root?: string): string | undefined {
-    if (toolName !== 'write' && toolName !== 'edit') return undefined
-    const target = this.resolveToolPath(args?.path, root)
-    if (!target || !this.isInsideWorkspace(target, root)) return undefined
-    return target
+    return resolveToolFilePath(toolName, args, root, this.config?.workspaceDir)
   }
 
   /** 串行保存会话附加数据，避免并发覆盖 */
@@ -442,10 +246,6 @@ export class AgentManager {
       })
   }
 
-  /**
-   * 订阅会话事件：转发文本 / 思考 / 工具步骤，并记录 write/edit 前后内容。
-   * Pi 的 write / edit 工具参数分别为 { path, content } 和 { path, edits }。
-   */
   /**
    * trace 统一分发：逐轮回调（chat 期间）+ 常驻订阅（事件唤醒的轮次）。
    * 任何一个 sink 抛错都不能掀掉本轮，因此逐个 try/catch。
@@ -469,286 +269,21 @@ export class AgentManager {
   }
 
   private subscribeToSessionEvents(runtime: SessionRuntime): () => void {
-    return runtime.session.subscribe((event: any) => {
-      try {
-        if (event.type === 'message_start' && event.message?.role === 'assistant') {
-          runtime.watchdog?.touch()
-          runtime.thinkingDeltaSeen.clear()
-          runtime.thinkingDurationsThisMessage = []
-          runtime.thinkingStart = null
-          return
+    return subscribeSessionEvents(runtime, {
+      getLogger: () => this.logger,
+      getWorkspaceDir: () => this.config?.workspaceDir,
+      persistExtras: (target) => this.persistExtras(target),
+      onAgentSettled: (target) => {
+        // 在事件回调外重建，避免销毁正在分发事件的会话
+        setTimeout(() => {
+          void this.applyPendingRoot(target)
+        }, 0)
+        try {
+          this.config?.onAgentSettled?.(target.id)
+        } catch (error) {
+          this.logger.warn('[Agent Manager] onAgentSettled failed:', error)
         }
-
-        if (event.type === 'message_end' && event.message?.role === 'assistant') {
-          const timestamp = event.message?.timestamp
-          if (
-            typeof timestamp === 'number' &&
-            runtime.thinkingDurationsThisMessage.length > 0
-          ) {
-            runtime.extras.thinkingDurations[String(timestamp)] = [
-              ...runtime.thinkingDurationsThisMessage,
-            ]
-            this.persistExtras(runtime)
-          }
-          return
-        }
-
-        if (event.type === 'message_update') {
-          const update = event.assistantMessageEvent
-          if (update?.type === 'text_delta' && typeof update.delta === 'string') {
-            runtime.watchdog?.touch()
-            // Gemini 等供应商会在 toolUse 末尾附带空串 delta，不得透传以免切碎过程轨迹
-            if (update.delta.length > 0) {
-              runtime.onTextDelta?.(update.delta)
-              runtime.onTrace?.({ type: 'text_delta', delta: update.delta })
-            }
-          } else if (update?.type === 'thinking_start') {
-            if (typeof update.contentIndex === 'number') {
-              runtime.thinkingDeltaSeen.delete(update.contentIndex)
-            }
-            runtime.thinkingStart = Date.now()
-          } else if (update?.type === 'thinking_delta' && typeof update.delta === 'string') {
-            runtime.watchdog?.touch()
-            if (typeof update.contentIndex === 'number') {
-              runtime.thinkingDeltaSeen.add(update.contentIndex)
-            }
-            runtime.onTrace?.({ type: 'thinking_delta', delta: update.delta })
-          } else if (update?.type === 'thinking_end') {
-            const index = typeof update.contentIndex === 'number' ? update.contentIndex : -1
-            if (runtime.thinkingStart !== null) {
-              runtime.thinkingDurationsThisMessage.push(
-                Math.max(0, Date.now() - runtime.thinkingStart)
-              )
-              runtime.thinkingStart = null
-            }
-            // 部分供应商只在 end 给出完整内容，或返回脱敏后的空内容
-            if (!runtime.thinkingDeltaSeen.has(index)) {
-              const content = typeof update.content === 'string' ? update.content : ''
-              if (content) runtime.onTrace?.({ type: 'thinking_delta', delta: content })
-              else runtime.onTrace?.({ type: 'thinking_redacted' })
-            }
-          } else if (
-            update?.type === 'toolcall_start' ||
-            update?.type === 'toolcall_delta'
-          ) {
-            // 工具参数 JSON 增量：写大文件时可能持续几十秒，属于模型仍在产出
-            runtime.watchdog?.touch()
-          }
-          return
-        }
-
-        // Pi SDK 自带自动重试（429 / 5xx / 网络抖动），记录并转发给渲染层
-        if (event.type === 'auto_retry_start') {
-          runtime.watchdog?.touch()
-          this.logger.warn(
-            `[Agent Manager] Provider retry ${event.attempt}/${event.maxAttempts} in ${event.delayMs}ms: ${event.errorMessage ?? ''}`
-          )
-          runtime.onTrace?.({
-            type: 'retry_start',
-            attempt: Number(event.attempt) || 0,
-            maxAttempts: Number(event.maxAttempts) || 0,
-            delayMs: Number(event.delayMs) || 0,
-            message: typeof event.errorMessage === 'string' ? event.errorMessage : undefined,
-          })
-          return
-        }
-        if (event.type === 'auto_retry_end') {
-          runtime.watchdog?.touch()
-          this.logger.info(`[Agent Manager] Auto retry ${event.success ? 'succeeded' : 'failed'}`)
-          runtime.onTrace?.({ type: 'retry_end', success: Boolean(event.success) })
-          return
-        }
-
-        // 上下文压缩：转发开始 / 结束，渲染层据此插入分隔线（R-05）；压缩期间挂起空闲看门狗
-        if (event.type === 'compaction_start') {
-          runtime.watchdog?.beginCompaction()
-          runtime.onTrace?.({ type: 'compaction_start', reason: event.reason })
-          return
-        }
-        if (event.type === 'compaction_end') {
-          runtime.watchdog?.endCompaction()
-          const error =
-            typeof event.errorMessage === 'string' ? event.errorMessage : undefined
-          const aborted = Boolean((event as any).aborted)
-          // 成功落盘才有 entry 可对齐；失败/取消不画分隔线，但仍下发原因供界面复位
-          const entry = error || aborted ? null : this.resolveCompactionEntry(runtime)
-          runtime.onTrace?.({
-            type: 'compaction_end',
-            reason: event.reason,
-            tokensBefore:
-              typeof event.result?.tokensBefore === 'number'
-                ? event.result.tokensBefore
-                : typeof entry?.tokensBefore === 'number'
-                  ? entry.tokensBefore
-                  : undefined,
-            error,
-            aborted: aborted || undefined,
-            willRetry:
-              typeof (event as any).willRetry === 'boolean'
-                ? (event as any).willRetry
-                : undefined,
-            entryId: entry?.id,
-            timestamp: entry ? entryTimestamp(entry.timestamp) : undefined,
-          })
-          return
-        }
-
-        if (event.type === 'agent_start') {
-          runtime.sdkStreaming = true
-          // 事件唤醒轮次（sendCustomMessage triggerTurn）不走 chat()，同样需要空闲超时看门狗
-          if (!runtime.watchdog) {
-            const bgWatchdog = new StallWatchdog({
-              timeoutMs: STALL_TIMEOUT_MS,
-              logger: this.logger,
-              onStall: (idleMs) => {
-                this.logger.warn(
-                  `[Agent Manager] Event-triggered turn stalled for ${Math.round(idleMs / 1000)}s; aborting session ${runtime.id}`
-                )
-                void runtime.session.abort().catch((error) => {
-                  this.logger.warn('[Agent Manager] Failed to abort stalled background turn:', error)
-                })
-              },
-            })
-            runtime.bgWatchdog = bgWatchdog
-            runtime.watchdog = bgWatchdog
-            bgWatchdog.start()
-          }
-          return
-        }
-
-        if (event.type === 'agent_settled') {
-          runtime.sdkStreaming = false
-          if (runtime.bgWatchdog) {
-            runtime.bgWatchdog.stop()
-            if (runtime.watchdog === runtime.bgWatchdog) runtime.watchdog = null
-            runtime.bgWatchdog = null
-          }
-          // 在事件回调外重建，避免销毁正在分发事件的会话
-          setTimeout(() => {
-            void this.applyPendingRoot(runtime)
-          }, 0)
-          try {
-            this.config?.onAgentSettled?.(runtime.id)
-          } catch (error) {
-            this.logger.warn('[Agent Manager] onAgentSettled failed:', error)
-          }
-          return
-        }
-
-        // 一轮结束：丢弃本轮未闭合的工具快照并复位看门狗残留工具计数，避免 Map 无限增长或看门狗失能
-        if (event.type === 'turn_end' || event.type === 'agent_end') {
-          runtime.watchdog?.resetTools()
-          if (event.type === 'agent_end') {
-            runtime.sdkStreaming = false
-            if (runtime.bgWatchdog) {
-              runtime.bgWatchdog.stop()
-              if (runtime.watchdog === runtime.bgWatchdog) runtime.watchdog = null
-              runtime.bgWatchdog = null
-            }
-          }
-          runtime.editSnapshots.clear()
-          runtime.toolFiles.clear()
-          runtime.thinkingDeltaSeen.clear()
-          return
-        }
-
-        if (event.type === 'tool_execution_start') {
-          runtime.watchdog?.beginTool(event.toolCallId)
-          const args = event.args ?? {}
-          const root = runtime.sessionManager.getCwd()
-          const filePath = this.toolFilePath(event.toolName, args, root)
-          if (filePath) runtime.toolFiles.set(event.toolCallId, filePath)
-          runtime.onTrace?.({
-            type: 'tool_start',
-            toolCallId: event.toolCallId,
-            toolName: event.toolName,
-            argsSummary: summarizeToolArgs(event.toolName, args),
-            startedAt: Date.now(),
-            parentToolCallId: event.parentToolCallId,
-          })
-
-          if (event.toolName !== 'write' && event.toolName !== 'edit') return
-          const target = this.resolveToolPath(args.path, root)
-          if (!target || !this.isInsideWorkspace(target, root)) return
-          const existed = existsSync(target)
-          let oldContent = ''
-          if (existed) {
-            try {
-              if (statSync(target).size > MAX_EDIT_SNAPSHOT_BYTES) return
-              oldContent = readFileSync(target, 'utf-8')
-            } catch {
-              return
-            }
-          }
-          runtime.editSnapshots.set(event.toolCallId, { path: target, oldContent, existed })
-          return
-        }
-
-        if (event.type === 'tool_execution_update') {
-          runtime.watchdog?.touch()
-          const preview = summarizeToolResult(
-            event.partialResult,
-            event.toolName === 'bash' || event.toolName === 'powershell'
-          )
-          if (preview) {
-            runtime.onTrace?.({
-              type: 'tool_update',
-              toolCallId: event.toolCallId,
-              resultPreview: preview,
-              parentToolCallId: event.parentToolCallId,
-            })
-          }
-          return
-        }
-
-        if (event.type === 'tool_execution_end') {
-          runtime.watchdog?.endTool(event.toolCallId)
-          const snapshot = runtime.editSnapshots.get(event.toolCallId)
-          const filePath = snapshot?.path ?? runtime.toolFiles.get(event.toolCallId)
-          runtime.editSnapshots.delete(event.toolCallId)
-          runtime.toolFiles.delete(event.toolCallId)
-
-          if (snapshot) {
-            let newContent = ''
-            let readable = true
-            if (existsSync(snapshot.path)) {
-              try {
-                if (statSync(snapshot.path).size > MAX_EDIT_SNAPSHOT_BYTES) {
-                  readable = false
-                } else {
-                  newContent = readFileSync(snapshot.path, 'utf-8')
-                }
-              } catch {
-                readable = false
-              }
-            }
-            if (readable && newContent !== snapshot.oldContent) {
-              runtime.pendingEdits.push({
-                path: snapshot.path,
-                oldContent: snapshot.oldContent,
-                newContent,
-                toolCallId: event.toolCallId,
-              })
-            }
-          }
-
-          runtime.onTrace?.({
-            type: 'tool_end',
-            toolCallId: event.toolCallId,
-            toolName: event.toolName,
-            status: event.isError ? 'error' : 'success',
-            durationMs: event.durationMs,
-            resultPreview: summarizeToolResult(
-              event.result,
-              event.toolName === 'bash' || event.toolName === 'powershell'
-            ),
-            filePath,
-            parentToolCallId: event.parentToolCallId,
-          })
-        }
-      } catch (error) {
-        this.logger.warn('[Agent Manager] Failed to process session event:', error)
-      }
+      },
     })
   }
 
@@ -779,7 +314,7 @@ export class AgentManager {
       const modelsPath = await writeModelsConfig(this.agentDir, { providerId, overrides })
       ensureBashOnPath(this.logger)
 
-      this.remoteCatalogSnapshot = undefined
+      this.catalogService.resetSnapshot()
       this.modelRuntime = await withTimeout(
         ModelRuntime.create({
           modelsPath,
@@ -1344,95 +879,27 @@ export class AgentManager {
    * 并同步 chat store，所以这里不抛错。
    */
   private resolveActiveModel(): Model<Api> | undefined {
-    const config = this.config
-    const modelRuntime = this.modelRuntime
-    if (!config || !modelRuntime) return undefined
-    const { providerId, modelId } = config.apiConfig
-    const models = this.catalogModels()
-    const recorded = models.find((model) => model.id === modelId)
-    if (recorded) return recorded
-    if (models.length === 0) {
-      const direct = modelRuntime.getModel(providerId, modelId)
-      if (direct) return direct
-    }
-    const fallback = models[0]
-    if (fallback) {
-      this.logger.warn(
-        `[Agent Manager] Model ${providerId}/${modelId} is unavailable; falling back to ${fallback.id}`
-      )
-    }
-    return fallback
+    return this.catalogService.resolveActiveModel()
   }
 
-  /**
-   * 模型能力：全部来自 catalog（含 models.json 里烘进去的覆盖值）。
-   * `maxTokensSource` 只用来解释生效值的来源，UI 只做展示。
-   */
   async getModelCapabilities(): Promise<{
     success: boolean
     models?: ModelCapabilityInfo[]
     selected?: string
     error?: string
   }> {
-    try {
-      if (!this.modelRuntime || !this.config) {
-        return { success: false, error: 'Agent not initialized.' }
-      }
-      const { overrides } = this.config.apiConfig
-      const active = this.resolveActiveModel()
-
-      const models = this.catalogModels().map((model): ModelCapabilityInfo => {
-          const limits = effectiveLimits(model)
-          const override = overrides?.[model.id]
-          const userSet =
-            (typeof override?.contextWindow === 'number' && override.contextWindow > 0) ||
-            (typeof override?.maxTokens === 'number' && override.maxTokens > 0)
-          const supportsThinking = Boolean(model.reasoning)
-          return {
-            id: model.id,
-            available: true,
-            contextWindow: limits.contextWindow,
-            maxTokens: limits.maxTokens,
-            maxTokensSource: userSet ? 'user' : limits.maxTokens < (model.maxTokens ?? 0) ? 'clamped' : 'catalog',
-            reasoning: supportsThinking,
-            vision: Array.isArray(model.input) && model.input.includes('image'),
-            thinkingLevels: supportsThinking ? thinkingLevelsOf(model) : [],
-          }
-        })
-
-      return { success: true, models, selected: active?.id ?? this.config.apiConfig.modelId }
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : String(error) }
-    }
+    return this.catalogService.getModelCapabilities()
   }
 
-  /** 供应商目录视图所需的最小信息（P4 的 providers:models 在此基础上补 UI 字段） */
   async getProviderCatalog(): Promise<{
     success: boolean
     providerId?: string
     models?: Array<{ id: string; name: string; limits: ModelLimits; reasoning: boolean }>
     error?: string
   }> {
-    if (!this.modelRuntime || !this.config) {
-      return { success: false, error: 'Agent not initialized.' }
-    }
-    const { providerId } = this.config.apiConfig
-    return {
-      success: true,
-      providerId,
-      models: this.catalogModels().map((model) => ({
-        id: model.id,
-        name: model.name ?? model.id,
-        limits: effectiveLimits(model),
-        reasoning: Boolean(model.reasoning),
-      })),
-    }
+    return this.catalogService.getProviderCatalog()
   }
 
-  /**
-   * 刷新模型目录（pi.dev）。`force` 绕过 SDK 的 4h 节流（手动刷新按钮必须传）。
-   * `added` / `removed` 由我们自己对比快照算，SDK 的 refresh() 只返回 errors。
-   */
   async refreshCatalog(options: { force?: boolean } = {}): Promise<{
     success: boolean
     added: number
@@ -1440,39 +907,7 @@ export class AgentManager {
     checkedAt?: number
     error?: string
   }> {
-    const modelRuntime = this.modelRuntime
-    if (!modelRuntime || !this.config) {
-      return { success: false, added: 0, removed: 0, error: 'Agent not initialized.' }
-    }
-    const store = this.config.modelsStore
-    const snapshotter = store && 'snapshot' in store ? (store as { snapshot(): Promise<Array<{ providerId: string; ids: string[]; checkedAt?: number }>> }) : null
-    const before = snapshotter ? await snapshotter.snapshot() : []
-    try {
-      const result = await modelRuntime.refresh({
-        allowNetwork: true,
-        providers: [...PRESET_PROVIDER_IDS],
-        force: options.force === true,
-      })
-      await this.syncRemoteCatalogSnapshot(this.config.apiConfig.providerId)
-      if (result.errors.size > 0) {
-        const first = [...result.errors.entries()][0]
-        return {
-          success: false,
-          added: 0,
-          removed: 0,
-          error: `${first[0]}: ${first[1].message}`,
-        }
-      }
-      const after = snapshotter ? await snapshotter.snapshot() : []
-      const { added, removed } = diffCatalogSnapshots(before, after)
-      const checkedAt = after.reduce<number | undefined>(
-        (latest, entry) => (entry.checkedAt && (!latest || entry.checkedAt > latest) ? entry.checkedAt : latest),
-        undefined
-      )
-      return { success: true, added, removed, checkedAt }
-    } catch (error) {
-      return { success: false, added: 0, removed: 0, error: error instanceof Error ? error.message : String(error) }
-    }
+    return this.catalogService.refreshCatalog(options)
   }
 
   /** 列出提示模板与技能（R-13）；读取前重新扫描文件，新增模板无需重启 */
@@ -1927,14 +1362,14 @@ export class AgentManager {
     // 尚未落盘的会话先留成待写入标题，由首次落盘时一并写进记录
     let restoredPendingTitle: string | null = null
     if (recordedTitle) {
-      this.settledTitles.set(id, recordedTitle)
+      this.titleService.setSettled(id, recordedTitle)
       if (extras.title !== recordedTitle) {
         extras.title = recordedTitle
         titleBackfilled = true
       }
     } else if (extras.title) {
       // 记录里丢了标题（分支裁剪 / 迁移 / 旧版本）：标题已确定，绝不重新生成
-      this.settledTitles.set(id, extras.title)
+      this.titleService.setSettled(id, extras.title)
       if (persistedOnDisk) {
         try {
           sessionManager.appendSessionInfo(extras.title)
@@ -2065,6 +1500,7 @@ export class AgentManager {
       sdkStreaming: false,
       bgWatchdog: null,
       thinkingDeltaSeen: new Set(),
+      thinkingStarts: new Map(),
       toolFiles: new Map(),
       editSnapshots: new Map(),
       pendingEdits: [],
@@ -2077,7 +1513,6 @@ export class AgentManager {
       registeredTools,
       extras,
       extrasSave: Promise.resolve(),
-      thinkingStart: null,
       thinkingDurationsThisMessage: [],
       lastCompactionEntryId: null,
       lastCompactionEntry: null,
@@ -2333,7 +1768,7 @@ export class AgentManager {
       runtime.sessionManager.appendSessionInfo(sessionName)
     }
     // 标题已确定：重建后不得再次自动生成
-    if (pendingTitle) this.settledTitles.set(runtime.id, pendingTitle)
+    if (pendingTitle) this.titleService.setSettled(runtime.id, pendingTitle)
     else if (sessionName) this.settleSessionTitle(runtime, sessionName)
   }
 
@@ -2360,33 +1795,16 @@ export class AgentManager {
    * parts 保留 thinking、text、tool 的真实顺序，供前端时间线渲染。
    */
   private sessionMessages(runtime: SessionRuntime): AgentMessage[] {
-    return buildSessionMessagesFromEntries(activeTimeline(runtime.sessionManager), {
+    return deriveMessages(activeTimeline(runtime.sessionManager), {
       thinkingDurations: runtime.extras.thinkingDurations,
       toolFilePath: (toolName: string, args: any) =>
         this.toolFilePath(toolName, args, runtime.sessionManager.getCwd()),
     })
   }
 
-  /** 成功压缩后取回本次落盘的 compaction entry；已转发过则返回 null */
+  /** 成功压缩后取回本次落盘的 compaction entry（只扫当前分支）；已转发过则返回 null */
   private resolveCompactionEntry(runtime: SessionRuntime): any | null {
-    try {
-      const entries = runtime.sessionManager.getEntries() as any[]
-      for (let index = entries.length - 1; index >= 0; index -= 1) {
-        const entry = entries[index]
-        if (entry?.type !== 'compaction') continue
-        if (entry.id === runtime.lastCompactionEntryId) return null
-        runtime.lastCompactionEntryId = entry.id
-        runtime.lastCompactionEntry = {
-          id: entry.id,
-          timestamp: entryTimestamp(entry.timestamp),
-          tokensBefore: typeof entry.tokensBefore === 'number' ? entry.tokensBefore : undefined,
-        }
-        return entry
-      }
-    } catch (error) {
-      this.logger.warn('[Agent Manager] Failed to resolve compaction entry:', error)
-    }
-    return null
+    return resolveBranchCompactionEntry(runtime, this.logger)
   }
 
   private runtimeSummary(runtime: SessionRuntime): SessionSummary {
@@ -2397,29 +1815,13 @@ export class AgentManager {
 
     return {
       id: runtime.id,
-      title: (this.sessionTitle(runtime) ?? this.recordFirstUserText(runtime)).slice(0, 60),
+      title: (
+        this.titleService.sessionTitle(runtime) ?? this.titleService.recordFirstUserText(runtime)
+      ).slice(0, 60),
       messageCount,
       createdAt: runtime.createdAt,
       updatedAt: runtime.updatedAt,
     }
-  }
-
-  /**
-   * 记录行序的首条用户消息文本。
-   * 回退标题必须与磁盘列表（SessionInfo.firstMessage）同一口径，
-   * 否则同一个会话在「标签打开 / 关闭」两种状态下会显示不同标题。
-   */
-  private recordFirstUserText(runtime: SessionRuntime): string {
-    try {
-      for (const entry of runtime.sessionManager.getEntries() as any[]) {
-        if (entry?.type !== 'message' || entry.message?.role !== 'user') continue
-        const text = stripContextBlock(this.messageText(entry.message.content)).trim()
-        if (text) return text
-      }
-    } catch (error) {
-      this.logger.warn('[Agent Manager] Failed to resolve the first user message:', error)
-    }
-    return ''
   }
 
   /** 打开指定会话；不传则继续最近会话 */
@@ -2529,7 +1931,7 @@ export class AgentManager {
           id: info.id,
           title: (
             info.name?.trim() ||
-            this.settledTitles.get(info.id)?.trim() ||
+            this.titleService.getSettled(info.id)?.trim() ||
             stripContextBlock(info.firstMessage ?? '').trim()
           ).slice(0, 60),
           messageCount: info.messageCount,
@@ -2567,10 +1969,10 @@ export class AgentManager {
       const runtime = this.runtimes.get(sessionId)
       // 同名重命名直接成功：重复追加只会在 JSONL 里留下多余的 session_info
       const current = runtime
-        ? this.sessionTitle(runtime)
-        : this.settledTitles.get(sessionId) ?? null
+        ? this.titleService.sessionTitle(runtime)
+        : this.titleService.getSettled(sessionId) ?? null
       if (current === title) {
-        this.settledTitles.set(sessionId, title)
+        this.titleService.setSettled(sessionId, title)
         return { success: true }
       }
       if (runtime) {
@@ -2592,8 +1994,8 @@ export class AgentManager {
       if (!file) return { success: false, error: 'Session not found.' }
       const manager = SessionManager.open(file, this.sessionDir, root)
       manager.appendSessionInfo(title)
-      this.settledTitles.set(sessionId, title)
-      void this.saveSessionTitleExtra(sessionId, title)
+      this.titleService.setSettled(sessionId, title)
+      void this.titleService.saveSessionTitleExtra(sessionId, title)
       return { success: true }
     } catch (error) {
       return {
@@ -2625,7 +2027,7 @@ export class AgentManager {
         await inflight.catch(() => undefined)
       }
       await this.closeSession(sessionId)
-      this.settledTitles.delete(sessionId)
+      this.titleService.delete(sessionId)
       this.creatingRuntimes.delete(sessionId)
       if (!file) return { success: true }
       if (this.extrasStore) {
@@ -2870,8 +2272,9 @@ export class AgentManager {
 
       const messages = runtime.session.messages
 
-      // 只认本轮新增的 assistant 消息（压缩重建数组后下标不再可信，见 findRunAssistant）
-      const lastAssistant = findRunAssistant(messages, messageStartIndex, runStartedAt)
+      // 只认本轮新增的 assistant 消息；同时聚合多步工具调用的 usage，避免只计最后一步漏算前序 token/费用
+      const runAssistants = collectRunAssistants(messages, messageStartIndex, runStartedAt)
+      const lastAssistant = runAssistants[runAssistants.length - 1] ?? null
 
       if (!lastAssistant) {
         this.logger.warn(
@@ -2881,7 +2284,7 @@ export class AgentManager {
         return { success: false, error: 'Agent did not produce a response.', edits }
       }
 
-      const usage = this.readUsage(lastAssistant)
+      const usage = aggregateTurnUsage(runAssistants)
 
       if (lastAssistant.stopReason === 'error') {
         const detail = lastAssistant.errorMessage || 'Agent request failed'
@@ -3075,169 +2478,12 @@ export class AgentManager {
     return this.config?.getLanguage?.() === 'en' ? IMAGE_ONLY_PROMPTS[1] : IMAGE_ONLY_PROMPTS[0]
   }
 
-  private messageText(content: unknown): string {
-    return extractMessageText(content)
+  private maybeGenerateTitle(runtime: SessionRuntime): Promise<void> {
+    return this.titleService.maybeGenerateTitle(runtime)
   }
 
-  /**
-   * 第一轮成功后生成会话标题；不在关键路径上。
-   * 标题一旦确定（会话记录里的 session_info 或 sidecar 快照）就不再自动改写，
-   * 只有用户手动重命名例外。命名输入取会话记录（首条用户消息 + 最早一条带文本的回复），
-   * 而不是压缩后的模型上下文。
-   */
-  private async maybeGenerateTitle(runtime: SessionRuntime): Promise<void> {
-    if (runtime.titleAttempted) return
-    const config = this.config
-    if (!config?.onSessionTitle) return
-    if (this.sessionTitle(runtime)) {
-      runtime.titleAttempted = true
-      return
-    }
-
-    const turn = this.titleSourceTexts(runtime)
-    // 首轮还没有文本回复（工具轮 / 中断 / 纯图片）：不消耗这次机会，下一轮再看
-    if (!turn.assistantText) {
-      this.logger.info('[Agent Manager] Session title skipped: no assistant text yet')
-      return
-    }
-    runtime.titleAttempted = true
-
-    // 纯图片对话：没有可摘取的用户文本，直接写固定标题，不再调用模型
-    if (turn.imageOnly) {
-      await this.persistSessionTitle(
-        runtime,
-        config,
-        config.getLanguage?.() === 'en' ? 'Image chat' : '图片对话'
-      )
-      return
-    }
-    if (!turn.userText) {
-      this.logger.info('[Agent Manager] Session title skipped: no user text to name')
-      return
-    }
-
-    const titleModel = this.resolveSessionModel(runtime)
-    const raw = titleModel
-      ? await requestSessionTitle(
-          this.modelRuntime!,
-          titleModel,
-          buildTitlePrompt(turn.userText, turn.assistantText),
-          this.logger
-        )
-      : null
-    const title = raw ? parseTitleResponse(raw) : ''
-    // 空结果或直接复述用户原话（等于回退标题，没有信息量）都算不可用
-    if (!title || isEchoOfUserText(title, turn.userText)) {
-      // 结果不可用（推理型模型可能把预算全花在 reasoning 上）不算「已确定」：
-      // 留机会给下一轮，但最多试 TITLE_MAX_FAILURES 次，避免每轮都打一次请求
-      runtime.titleFailures += 1
-      if (runtime.titleFailures < TITLE_MAX_FAILURES) runtime.titleAttempted = false
-      this.logger.warn(
-        `[Agent Manager] Session title unavailable (${runtime.titleFailures}/${TITLE_MAX_FAILURES}), keeping the fallback title`,
-        title ? `rejected: ${JSON.stringify(title)}` : ''
-      )
-      return
-    }
-    await this.persistSessionTitle(runtime, config, title)
-  }
-
-  /**
-   * 命名输入：会话记录里首条用户消息 + 最早一条带文本的回复。
-   * - 只读会话记录（getEntries）：压缩后的模型上下文不含首条消息，用它命名会得到
-   *   与会话主题无关的标题。
-   * - 首条 assistant 常常只有 thinking / toolCall，必须跳过它们取第一条文本回复。
-   * - 首轮始终没有文本回复时不消耗机会，留给后面的轮次。
-   */
-  private titleSourceTexts(runtime: SessionRuntime) {
-    return extractTitleSourceTexts(runtime.sessionManager, this.logger)
-  }
-
-  /** 已确定的标题：临时标题 → 会话记录 → 进程内已确定 → sidecar 快照 */
-  private sessionTitle(runtime: SessionRuntime): string | null {
-    const pending = runtime.pendingTitle?.trim()
-    if (pending) return pending
-    try {
-      const recorded = (runtime.sessionManager.getSessionName() ?? '').trim()
-      if (recorded) return recorded
-    } catch (error) {
-      this.logger.warn('[Agent Manager] Failed to read the session title:', error)
-    }
-    return this.settledTitles.get(runtime.id)?.trim() || runtime.extras.title?.trim() || null
-  }
-
-  /** 标记标题已确定（进程内 + sidecar）：之后只有手动重命名能改写 */
   private settleSessionTitle(runtime: SessionRuntime, title: string): void {
-    this.settledTitles.set(runtime.id, title)
-    if (this.settledTitles.size > 500) {
-      const oldest = this.settledTitles.keys().next().value
-      if (oldest !== undefined) this.settledTitles.delete(oldest)
-    }
-    if (runtime.extras.title === title) return
-    runtime.extras.title = title
-    this.persistExtras(runtime)
-  }
-
-  /**
-   * 写入会话标题。生成结果可能在运行时已被释放（关标签 / 切工作树 / 硬超时重建）
-   * 之后才返回，所以落盘不依赖运行时是否还在——已经生成好的标题不能丢。
-   */
-  private async persistSessionTitle(
-    runtime: SessionRuntime,
-    config: AgentConfig,
-    title: string
-  ): Promise<void> {
-    const id = runtime.id
-    const value = title.trim().slice(0, 80)
-    if (!value) return
-    if (this.sessionTitle(runtime) || this.settledTitles.has(id)) return
-
-    try {
-      const liveRuntime = this.runtimes.get(id)
-      if (liveRuntime) {
-        liveRuntime.sessionManager.appendSessionInfo(value)
-        liveRuntime.updatedAt = Date.now()
-        this.settleSessionTitle(liveRuntime, value)
-      } else if (await this.appendTitleToSessionRecord(id, value)) {
-        this.settledTitles.set(id, value)
-        void this.saveSessionTitleExtra(id, value)
-      } else {
-        this.logger.warn('[Agent Manager] Failed to persist the session title: session is gone')
-        return
-      }
-    } catch (error) {
-      this.logger.warn('[Agent Manager] Failed to persist the session title:', error)
-      return
-    }
-
-    config.onSessionTitle?.(id, value)
-    this.logger.info('[Agent Manager] Generated session title:', value)
-  }
-
-  /** 运行时已释放：按会话 id 找到记录文件，直接补写标题 */
-  private async appendTitleToSessionRecord(id: string, title: string): Promise<boolean> {
-    if (this.deletedSessions.has(id)) return false
-    const config = this.config
-    if (!config) return false
-    const root = config.resolveSessionRoot?.(id) ?? config.workspaceDir
-    const file =
-      (await this.findSessionFile(id)) ?? SessionManager.findById(root, id, this.sessionDir)
-    if (!file) return false
-    const manager = SessionManager.open(file, this.sessionDir, root)
-    if ((manager.getSessionName() ?? '').trim()) return false
-    manager.appendSessionInfo(title)
-    return true
-  }
-
-  /** 运行时已释放：把标题快照写进 sidecar（重开会话时据此补写回记录） */
-  private async saveSessionTitleExtra(id: string, title: string): Promise<void> {
-    if (!this.extrasStore || this.deletedSessions.has(id)) return
-    try {
-      const extras = await this.extrasStore.load(id)
-      if (extras.title === title) return
-      await this.extrasStore.save(id, { ...extras, title })
-    } catch (error) {
-      this.logger.warn('[Agent Manager] Failed to save the session title:', error)
-    }
+    this.titleService.settleSessionTitle(runtime, title)
   }
 
   /**
@@ -3306,7 +2552,8 @@ export class AgentManager {
       await Promise.allSettled(inflight)
     }
     await this.disposeAllRuntimes()
-    this.settledTitles.clear()
+    this.titleService.clear()
+    this.catalogService.resetSnapshot()
     this.creatingRuntimes.clear()
     this.rebindingPromises.clear()
     this.rebinding.clear()

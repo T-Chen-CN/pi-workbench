@@ -12,7 +12,7 @@
 import type { SessionManager } from '@earendil-works/pi-coding-agent'
 
 export type TimelineItem =
-  | { kind: 'message'; message: any }
+  | { kind: 'message'; entryId?: string; timestamp?: number; message: any }
   | {
       kind: 'compaction'
       entryId: string
@@ -79,11 +79,21 @@ export function activeTimeline(manager: SessionManager): TimelineItem[] {
       const replacement = edits.get(entry.id)
       // replacement === null：该条被省略（overflow 恢复会这样隐藏失败的那次尝试）
       if (replacement === null) continue
-      items.push({ kind: 'message', message: applyReplacement(entry.message, replacement) })
+      items.push({
+        kind: 'message',
+        entryId: String(entry.id ?? ''),
+        timestamp: entryTimestamp(entry.timestamp),
+        message: applyReplacement(entry.message, replacement),
+      })
       continue
     }
 
-    items.push({ kind: 'message', message: entry.message })
+    items.push({
+      kind: 'message',
+      entryId: String(entry.id ?? ''),
+      timestamp: entryTimestamp(entry.timestamp),
+      message: entry.message,
+    })
   }
 
   return items

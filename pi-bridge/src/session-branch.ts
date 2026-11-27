@@ -36,7 +36,8 @@ export function buildBranchGroups(manager: SessionManager): ConversationBranchGr
     const timestamp = (entry.message as { timestamp?: unknown }).timestamp
     groups.push({
       userTimestamp:
-        typeof timestamp === 'number' ? timestamp : Date.parse(entry.timestamp) || Date.now(),
+        typeof timestamp === 'number' ? timestamp : Date.parse(entry.timestamp) || 0,
+      userEntryId: entry.id,
       activeIndex: activeIndex >= 0 ? activeIndex : 0,
       branches: replies.map((child) => ({
         entryId: child.entry.id,

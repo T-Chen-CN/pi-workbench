@@ -38,6 +38,8 @@ export type AgentTracePart =
       durationMs?: number
       resultPreview?: string
       filePath?: string
+      /** 嵌套调用（子 Agent）的父级工具调用 */
+      parentToolCallId?: string
     }
   | {
       /** 上下文压缩点：作为 part 参与时间线排序，位置跟随压缩发生的先后 */
@@ -259,14 +261,20 @@ export interface ConversationBranchOption {
 export interface ConversationBranchGroup {
   /** 该轮用户消息的时间戳，与历史消息的 timestamp 对应 */
   userTimestamp: number
+  /** 该轮用户消息在 JSONL 中的持久化 entryId（优先匹配锚点，不受时钟漂移影响） */
+  userEntryId?: string
   activeIndex: number
   branches: ConversationBranchOption[]
 }
 
 export interface AgentMessage {
+  /** 对应 JSONL 会话记录中的持久化 entryId（用户消息为 user entryId，助手轮次为首条 assistant entryId） */
+  entryId?: string
   role: 'user' | 'assistant'
   content: string
   parts?: AgentTracePart[]
+  /** 历史/实时统一的轮次 token 与费用累计（从 JSONL assistant usage 聚合还原） */
+  usage?: AgentUsage
   /** 用户消息附带的图片（R-08），用于历史恢复时展示 */
   images?: Array<{ data: string; mimeType: string }>
   /**

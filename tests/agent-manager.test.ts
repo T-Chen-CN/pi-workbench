@@ -1290,13 +1290,14 @@ describe('AgentManager session history', () => {
     )
 
     expect(manager.getSessionMessages()).toEqual([
-      { role: 'user', content: 'question', timestamp: expect.any(Number) },
+      { entryId: 'm-2', role: 'user', content: 'question', timestamp: expect.any(Number) },
       {
+        entryId: 'm-3',
         role: 'assistant',
         content: 'part one\npart two',
         parts: [
-          { type: 'text', id: 'text-1', text: 'part one' },
-          { type: 'text', id: 'text-2', text: 'part two' },
+          { type: 'text', id: 'm-3:text:1', text: 'part one' },
+          { type: 'text', id: 'm-3:text:2', text: 'part two' },
         ],
         timestamp: 5,
       },
@@ -1362,7 +1363,7 @@ describe('AgentManager session history', () => {
     })
 
     expect(manager.getSessionMessages()).toEqual([
-      { role: 'user', content: 'explain this', timestamp: expect.any(Number) },
+      { entryId: 'm-1', role: 'user', content: 'explain this', timestamp: expect.any(Number) },
     ])
   })
 
@@ -1546,11 +1547,12 @@ describe('AgentManager sessions', () => {
     expect(opened.success).toBe(true)
     expect(opened.session?.id).toBe('other-session')
     expect(opened.history).toEqual([
-      { role: 'user', content: 'restored', timestamp: expect.any(Number) },
+      { entryId: 'm-1', role: 'user', content: 'restored', timestamp: expect.any(Number) },
       {
+        entryId: 'm-2',
         role: 'assistant',
         content: 'hello again',
-        parts: [{ type: 'text', id: 'text-1', text: 'hello again' }],
+        parts: [{ type: 'text', id: 'm-2:text:1', text: 'hello again' }],
         timestamp: expect.any(Number),
       },
     ])
@@ -2787,6 +2789,7 @@ describe('conversation branches', () => {
     expect(result.groups).toEqual([
       {
         userTimestamp: 1000,
+        userEntryId: 'u1',
         activeIndex: 1,
         branches: [
           { entryId: 'a1', preview: 'first answer' },

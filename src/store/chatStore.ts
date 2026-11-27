@@ -32,6 +32,8 @@ export interface ChatUsage {
 
 export interface ChatMessage {
   id: string
+  /** 对应 JSONL 会话记录中的持久化 entryId（用于精确分支匹配与轮末对账） */
+  entryId?: string
   /** system：上下文压缩等分隔提示，不属于对话内容 */
   role: 'user' | 'assistant' | 'system'
   content: string
@@ -224,6 +226,8 @@ interface ChatState {
   appendPlanMessage: (key: string, plan: StructuredPlan) => void
   truncateLastTurn: (key: string) => void
   setMessages: (key: string, messages: Array<Omit<ChatMessage, 'id'>>) => void
+  /** 轮末以磁盘会话记录为单一真相源对账，保留仅存内存的 edits/plan 卡并稳定未变消息引用 */
+  reconcileMessages: (key: string, messages: Array<Omit<ChatMessage, 'id'>>) => void
   setLoading: (key: string, loading: boolean) => void
   setCompacting: (key: string, compacting: boolean) => void
   setError: (key: string, error: string | null) => void
@@ -615,14 +619,34 @@ export const useChatStore = create<ChatState>((set) => ({
     set((state) =>
       updateExisting(state, key, (current) => {
         if (current.messages.length === 0) return current
-        const byTimestamp = new Map(groups.map((group) => [group.userTimestamp, group]))
+        const byEntryId = new Map<string, ConversationBranchGroup>()
+        const byTimestamp = new Map<number, ConversationBranchGroup>()
+        for (const group of groups) {
+          if (group.userEntryId) byEntryId.set(group.userEntryId, group)
+          byTimestamp.set(group.userTimestamp, group)
+        }
+        let activeUserEntryId: string | undefined
         let userTimestamp: number | null = null
         const messages = current.messages.map((message) => {
           if (message.role === 'user') {
+            activeUserEntryId = message.entryId
             userTimestamp = message.timestamp
             return message
           }
-          const group = userTimestamp !== null ? byTimestamp.get(userTimestamp) : undefined
+          let group =
+            (activeUserEntryId ? byEntryId.get(activeUserEntryId) : undefined) ??
+            (userTimestamp !== null ? byTimestamp.get(userTimestamp) : undefined)
+          // 实时流式乐观用户消息在轮末对账前时间戳可能与主进程差几百毫秒，放宽 5s 就近兜底
+          if (!group && userTimestamp !== null) {
+            let bestDelta = 5000
+            for (const candidate of groups) {
+              const delta = Math.abs(candidate.userTimestamp - userTimestamp)
+              if (delta <= bestDelta) {
+                bestDelta = delta
+                group = candidate
+              }
+            }
+          }
           if (!group) {
             if (!message.branch) return message
             const next = { ...message }
@@ -833,7 +857,7 @@ export const useChatStore = create<ChatState>((set) => ({
                 : undefined)
             return {
               ...message,
-              id: `msg-${message.timestamp}-${index}`,
+              id: message.entryId ? `entry-${message.entryId}` : `msg-${message.timestamp}-${index}`,
               parts,
               thinkingStartedAt: undefined,
             }
@@ -841,6 +865,64 @@ export const useChatStore = create<ChatState>((set) => ({
         },
       },
     })),
+
+  reconcileMessages: (key, diskMessages) =>
+    set((state) =>
+      updateExisting(state, key, (current) => {
+        if (diskMessages.length === 0) return current
+        // 收集内存中仅在实时态持有的 edits / plan 卡片与原 React id，避免轮末对账丢卡或整屏闪动
+        const prevByEntryId = new Map<string, ChatMessage>()
+        const prevAssistants: ChatMessage[] = []
+        for (const msg of current.messages) {
+          if (msg.entryId) prevByEntryId.set(msg.entryId, msg)
+          if (msg.role === 'assistant') prevAssistants.push(msg)
+        }
+        let assistantCursor = 0
+        const nextMessages: ChatMessage[] = diskMessages.map((message, index) => {
+          const prev =
+            (message.entryId ? prevByEntryId.get(message.entryId) : undefined) ??
+            (message.role === 'assistant' ? prevAssistants[assistantCursor] : current.messages[index])
+          if (message.role === 'assistant') assistantCursor += 1
+
+          const baseParts =
+            message.parts ??
+            (message.role === 'assistant' && message.content
+              ? [{ type: 'text' as const, id: `text-${index + 1}`, text: message.content }]
+              : undefined)
+
+          // 保留仅挂在内存态的 plan 卡片（不写入 JSONL entries）
+          const prevPlanParts = (prev?.parts ?? []).filter((part) => part.type === 'plan')
+          let mergedParts = baseParts
+          if (prevPlanParts.length > 0 && message.role === 'assistant') {
+            const existingPlanIds = new Set(
+              (baseParts ?? [])
+                .filter((p): p is Extract<AgentTracePart, { type: 'plan' }> => p.type === 'plan')
+                .map((p) => p.plan.id)
+            )
+            const missingPlans = prevPlanParts.filter(
+              (p) => p.type === 'plan' && !existingPlanIds.has(p.plan.id)
+            )
+            if (missingPlans.length > 0) {
+              mergedParts = [...(baseParts ?? []), ...missingPlans]
+            }
+          }
+
+          return {
+            ...message,
+            id:
+              prev?.id ??
+              (message.entryId ? `entry-${message.entryId}` : `msg-${message.timestamp}-${index}`),
+            parts: mergedParts,
+            usage: message.usage ?? prev?.usage,
+            edits: prev?.edits && prev.edits.length > 0 ? prev.edits : message.edits,
+            branch: prev?.branch ?? message.branch,
+            isStreaming: false,
+            thinkingStartedAt: undefined,
+          }
+        })
+        return { ...current, messages: nextMessages }
+      })
+    ),
 
   setLoading: (key, loading) =>
     set((state) =>

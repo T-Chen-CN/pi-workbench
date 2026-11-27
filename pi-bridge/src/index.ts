@@ -6,6 +6,13 @@
  */
 
 export { AgentManager } from './agent-manager.js'
+export {
+  deriveMessage,
+  deriveMessages,
+  mergeAgentUsage,
+  readMessageUsage,
+  type DeriveMessagesOptions,
+} from './session-view.js'
 export type {
   AgentChatOptions,
   AgentChatResult,

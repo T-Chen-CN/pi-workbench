@@ -1260,6 +1260,8 @@ export interface ConversationBranchOption {
 export interface ConversationBranchGroup {
   /** 该轮用户消息的时间戳，与历史消息的 timestamp 对应 */
   userTimestamp: number
+  /** 该轮用户消息在 JSONL 中的持久化 entryId（优先匹配锚点） */
+  userEntryId?: string
   activeIndex: number
   branches: ConversationBranchOption[]
 }
@@ -1590,9 +1592,19 @@ export interface RepoMapCanvasSetResult {
 export interface AgentHistoryResult {
   success: boolean
   history?: Array<{
+    entryId?: string
     role: 'user' | 'assistant'
     content: string
     parts?: AgentTracePart[]
+    usage?: {
+      input: number
+      output: number
+      reasoning: number
+      cacheRead: number
+      cacheWrite: number
+      totalTokens: number
+      cost: number
+    }
     /** 用户消息附带的图片（R-08） */
     images?: AgentImagePayload[]
     /** 用户消息随行的引用与附件；从会话记录里的上下文块解析而来 */
