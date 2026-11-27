@@ -246,8 +246,10 @@ interface RunningInstall {
   child: SpawnedProcess | null
   cancelled: boolean
   /** 提前结算（取消 / 超时）；exit 事件之后再来一次是空操作 */
-  settle: ((result: InstallResult) => void) | null
+  settle: ((result: InstallResult, options?: { deferSlotRelease?: boolean }) => void) | null
   promise: Promise<InstallResult>
+  /** 子进程实际退出（或超时兜底）后 resolve，供删树前等待文件句柄释放 */
+  exitPromise: Promise<void>
 }
 
 export interface WorktreeDepsInstallerOptions {
@@ -263,6 +265,8 @@ const defaultSpawn: SpawnFn = (command, args, options) =>
     env: options.env,
     windowsHide: options.windowsHide,
     shell: options.shell,
+    // Unix 上独立进程组以便按 -pid 收整棵进程树；Windows 上 detached 会弹控制台窗口，禁止开启
+    ...(process.platform !== 'win32' ? { detached: true } : {}),
     stdio: ['ignore', 'pipe', 'pipe'],
   }) as unknown as SpawnedProcess
 
@@ -286,6 +290,14 @@ function terminateTree(child: SpawnedProcess | null): void {
     // 必须等 taskkill /T /F 先收完进程树再补 SIGTERM，否则根进程先死会让 taskkill 找不到孙进程
     void killProcessTreeAsync(pid).finally(killSelf)
     return
+  }
+  if (pid !== null && process.platform !== 'win32') {
+    try {
+      process.kill(-pid, 'SIGTERM')
+      return
+    } catch {
+      // 进程未处于独立进程组时回退直接杀子进程
+    }
   }
   killSelf()
 }
@@ -322,6 +334,7 @@ export class WorktreeDepsInstaller {
       cancelled: false,
       settle: null,
       promise: Promise.resolve({ ok: false, error: 'not started' }),
+      exitPromise: Promise.resolve(),
     }
     // 先登记再启动：启动时同步失败（命令不存在）会立刻结算并从表里删掉自己
     this.running.set(worktreePath, entry)
@@ -383,8 +396,31 @@ export class WorktreeDepsInstaller {
     if (!entry) return false
     entry.cancelled = true
     this.running.delete(worktreePath)
+    const hasRealPid = typeof entry.child?.pid === 'number' && entry.child.pid > 0
     terminateTree(entry.child)
-    entry.settle?.({ ok: false, cancelled: true })
+    // 真实子进程正在退出时延迟归还串行槽位，防止下一个安装与未退净的进程争抢句柄
+    entry.settle?.({ ok: false, cancelled: true }, { deferSlotRelease: hasRealPid })
+    return true
+  }
+
+  /** 终止安装并等待真实子进程释放句柄（带超时兜底），用于删除工作树前防 Windows EBUSY */
+  async cancelAndWait(worktreePath: string, timeoutMs = 2000): Promise<boolean> {
+    const entry = this.running.get(worktreePath)
+    if (!entry) return false
+    const exitPromise = entry.exitPromise
+    this.cancel(worktreePath)
+    let timer: NodeJS.Timeout | null = null
+    try {
+      await Promise.race([
+        exitPromise,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, timeoutMs)
+          timer.unref?.()
+        }),
+      ])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
     return true
   }
 
@@ -409,10 +445,45 @@ export class WorktreeDepsInstaller {
 
     return new Promise<InstallResult>((resolve) => {
       let settled = false
+      let slotReleased = false
+      let exitResolved = false
+      let resolveExit!: () => void
+      entry.exitPromise = new Promise<void>((res) => {
+        resolveExit = () => {
+          if (exitResolved) return
+          exitResolved = true
+          res()
+        }
+      })
       let tail = ''
       let timer: NodeJS.Timeout | null = null
+      let slotFallbackTimer: NodeJS.Timeout | null = null
 
-      const finish = (result: InstallResult): void => {
+      const releaseSlotOnce = (): void => {
+        if (slotReleased) return
+        slotReleased = true
+        if (slotFallbackTimer) {
+          clearTimeout(slotFallbackTimer)
+          slotFallbackTimer = null
+        }
+        this.releaseSlot()
+      }
+
+      const finish = (
+        result: InstallResult,
+        finishOptions?: { deferSlotRelease?: boolean }
+      ): void => {
+        if (!finishOptions?.deferSlotRelease) {
+          resolveExit()
+          releaseSlotOnce()
+        } else if (!slotReleased && !slotFallbackTimer) {
+          // 真实进程取消后等 exit 释放槽位；若进程挂死，2s 后强行释放槽位防止队列饿死
+          slotFallbackTimer = setTimeout(() => {
+            resolveExit()
+            releaseSlotOnce()
+          }, 2000)
+          slotFallbackTimer.unref?.()
+        }
         if (settled) return
         settled = true
         if (timer) clearTimeout(timer)
@@ -421,8 +492,6 @@ export class WorktreeDepsInstaller {
         unregisterChild = null
         this.tails.set(worktreePath, tail)
         this.running.delete(worktreePath)
-        // 先交还串行令牌，再结算 promise：排队的下一个安装能立即开工
-        this.releaseSlot()
         resolve(result)
       }
 
@@ -618,10 +687,10 @@ export class WorktreeDepsManager {
     return { status, info }
   }
 
-  /** 手动触发 / 重试：忽略自动安装开关，总是重跑一次 */
+  /** 手动触发 / 重试：忽略自动安装开关与旧哈希短路，总是重跑一次以便修复损坏的依赖目录 */
   async install(
     worktreePath: string,
-    installedHash?: string | null
+    _installedHash?: string | null
   ): Promise<WorktreeDepsStatus> {
     const info = await resolveLockfileForWorktree(this.options.repoRoot, worktreePath)
     if (!info) {
@@ -638,18 +707,7 @@ export class WorktreeDepsManager {
           : {}),
       }
     }
-    if (installedHash !== undefined && installedHash !== null && installedHash === info.hash) {
-      // 哈希没变且目录还在：手动触发也只需确认，不必重跑
-      if (depsPresent(worktreePath, info.depsDir)) {
-        const status: WorktreeDepsStatus = {
-          state: 'ready',
-          manager: info.manager,
-          hash: info.hash,
-        }
-        this.publish(worktreePath, status)
-        return status
-      }
-    }
+    this.installed.delete(worktreePath)
     this.start(worktreePath, info)
     return {
       state: 'installing',
@@ -662,6 +720,15 @@ export class WorktreeDepsManager {
   /** 工作树被删除 / 遗忘：终止安装并忘掉它的内存状态 */
   forget(worktreePath: string): void {
     this.installer.cancel(worktreePath)
+    this.installed.delete(worktreePath)
+    this.failures.delete(worktreePath)
+    this.startedAt.delete(worktreePath)
+    this.published.delete(worktreePath)
+  }
+
+  /** 终止安装并等待子进程退出后再清理内存状态（供删工作树前调用） */
+  async forgetAndWait(worktreePath: string): Promise<void> {
+    await this.installer.cancelAndWait(worktreePath)
     this.installed.delete(worktreePath)
     this.failures.delete(worktreePath)
     this.startedAt.delete(worktreePath)

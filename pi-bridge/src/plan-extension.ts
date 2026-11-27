@@ -60,9 +60,14 @@ export function createPlanExtension(context: {
         if (context.getMode() !== 'plan') {
           throw new Error('submit_plan is only available in Plan mode.')
         }
-        if (runtime.extras.plan && runtime.extras.plan.status !== 'rejected') {
+        const existingPlan = runtime.extras.plan
+        const existingFinished =
+          existingPlan?.status === 'approved' &&
+          existingPlan.steps.length > 0 &&
+          existingPlan.steps.every((step) => step.status === 'done' || step.status === 'skipped')
+        if (existingPlan && existingPlan.status !== 'rejected' && !existingFinished) {
           throw new Error(
-            `A plan is already ${runtime.extras.plan.status}. Wait for the user to approve or reject it before submitting another.`
+            `A plan is already ${existingPlan.status}. Wait for the user to approve or reject it before submitting another.`
           )
         }
         const steps = normalizePlanSteps(params?.steps)

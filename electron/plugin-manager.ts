@@ -7,6 +7,7 @@
  */
 import * as fs from 'fs'
 import * as path from 'path'
+import { createHash } from 'crypto'
 import { createRequire } from 'module'
 import { readJsonWithBackup, writeJsonAtomicSync } from './atomic-json.js'
 
@@ -91,7 +92,75 @@ export interface PluginManagerOptions {
 
 const requireFromHere = createRequire(import.meta.url)
 
-function defaultRequire(entryPath: string): unknown {
+const PLUGIN_HASH_EXTS = new Set(['.js', '.cjs', '.mjs', '.json'])
+
+/** 清理插件目录及其所有子模块的 require.cache，避免热重载残留旧闭包 */
+function purgePluginRequireCache(pluginRoot: string, entryPath: string): void {
+  const normalizedRoot = process.platform === 'win32' ? pluginRoot.toLowerCase() : pluginRoot
+  const prefix = normalizedRoot.endsWith(path.sep) ? normalizedRoot : `${normalizedRoot}${path.sep}`
+  for (const key of Object.keys(requireFromHere.cache)) {
+    const normalizedKey = process.platform === 'win32' ? key.toLowerCase() : key
+    if (normalizedKey === normalizedRoot || normalizedKey.startsWith(prefix)) {
+      delete requireFromHere.cache[key]
+    }
+  }
+  try {
+    const resolved = requireFromHere.resolve(entryPath)
+    delete requireFromHere.cache[resolved]
+  } catch {
+    // ignore
+  }
+}
+
+/** 计算插件目录内所有代码/清单文件的确定性 SHA-256 哈希，用于防止磁盘被静默篡改后自动热重载执行 */
+export function computePluginDirectoryHash(directory: string): string {
+  const hash = createHash('sha256')
+  const files: string[] = []
+
+  const walk = (dir: string, relBase: string): void => {
+    let entries: fs.Dirent[]
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    entries.sort((a, b) => a.name.localeCompare(b.name))
+    for (const entry of entries) {
+      if (entry.name === 'node_modules' || entry.name === '.git') continue
+      const full = path.join(dir, entry.name)
+      const rel = relBase ? `${relBase}/${entry.name}` : entry.name
+      if (entry.isSymbolicLink()) {
+        try {
+          hash.update(`symlink:${rel}->${fs.readlinkSync(full)}\n`)
+        } catch {
+          hash.update(`symlink:${rel}\n`)
+        }
+        continue
+      }
+      if (entry.isDirectory()) {
+        walk(full, rel)
+      } else if (entry.isFile() && PLUGIN_HASH_EXTS.has(path.extname(entry.name).toLowerCase())) {
+        files.push(rel)
+      }
+    }
+  }
+
+  walk(directory, '')
+  files.sort()
+  for (const rel of files) {
+    hash.update(`file:${rel}\0`)
+    try {
+      hash.update(fs.readFileSync(path.join(directory, rel)))
+    } catch {
+      hash.update('<unreadable>')
+    }
+    hash.update('\0')
+  }
+  return hash.digest('hex')
+}
+
+function defaultRequire(entryPath: string, pluginRoot?: string): unknown {
+  if (pluginRoot) purgePluginRequireCache(pluginRoot, entryPath)
   const resolved = requireFromHere.resolve(entryPath)
   delete requireFromHere.cache[resolved]
   return requireFromHere(resolved)
@@ -135,6 +204,7 @@ export class PluginManager {
     }
 
     const enabledIds = this.readEnabledIds(workspaceDir)
+    const pinnedHashes = this.readPinnedHashes(workspaceDir)
     let entries: fs.Dirent[] = []
     try {
       entries = fs.readdirSync(pluginsDir, { withFileTypes: true }).filter((entry) => entry.isDirectory())
@@ -145,7 +215,7 @@ export class PluginManager {
     const seenIds = new Set<string>()
     for (const entry of entries) {
       const directory = path.join(pluginsDir, entry.name)
-      const plugin = this.loadPlugin(directory, entry.name, enabledIds, workspaceDir, seenIds)
+      const plugin = this.loadPlugin(directory, entry.name, enabledIds, pinnedHashes, workspaceDir, seenIds)
       state.plugins.push(plugin)
     }
 
@@ -204,7 +274,7 @@ export class PluginManager {
     }
   }
 
-  /** 启用/禁用插件并持久化到工作区配置 */
+  /** 启用/禁用插件并持久化到工作区配置（启用时钉住当前代码哈希，防止后续仓库更新/Agent 篡改被热重载静默执行） */
   setEnabled(workspaceDir: string, pluginId: string, enabled: boolean): PluginInfo[] {
     const current = this.readEnabledIds(workspaceDir)
     // 未配置时默认全部禁用：启用一个插件只把它自己写进白名单
@@ -214,8 +284,42 @@ export class PluginManager {
       ? [...new Set([...base, pluginId])]
       : base.filter((id) => id !== pluginId)
 
-    this.writeEnabledIds(workspaceDir, enabledPlugins)
+    const hashes = { ...this.readPinnedHashes(workspaceDir) }
+    if (enabled) {
+      const pluginDir = this.findPluginDirectory(workspaceDir, pluginId)
+      if (pluginDir) {
+        hashes[pluginId] = computePluginDirectoryHash(pluginDir)
+      } else {
+        delete hashes[pluginId]
+      }
+    } else {
+      delete hashes[pluginId]
+    }
+
+    this.writeEnabledIds(workspaceDir, enabledPlugins, hashes)
     return this.loadWorkspace(workspaceDir)
+  }
+
+  private findPluginDirectory(workspaceDir: string, pluginId: string): string | null {
+    const pluginsDir = path.join(workspaceDir, '.pi-workbench', 'plugins')
+    try {
+      for (const entry of fs.readdirSync(pluginsDir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue
+        const directory = path.join(pluginsDir, entry.name)
+        try {
+          const manifest = JSON.parse(
+            fs.readFileSync(path.join(directory, 'plugin.json'), 'utf-8')
+          ) as PluginManifest
+          const id = typeof manifest.id === 'string' && manifest.id ? manifest.id : entry.name
+          if (id === pluginId) return directory
+        } catch {
+          if (entry.name === pluginId) return directory
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return null
   }
 
   /** 该工作区是否已经有显式的插件启用列表（用于首次启用时的风险提示） */
@@ -228,9 +332,24 @@ export class PluginManager {
   }
 
   unload(workspaceDir: string): void {
+    const pending = this.unloadInternal(workspaceDir)
+    if (pending.length > 0) {
+      void Promise.allSettled(pending)
+    }
+  }
+
+  /** 异步卸载：等待插件的异步 deactivate() 收尾完成 */
+  async unloadAsync(workspaceDir: string): Promise<void> {
+    const pending = this.unloadInternal(workspaceDir)
+    if (pending.length > 0) {
+      await Promise.allSettled(pending)
+    }
+  }
+
+  private unloadInternal(workspaceDir: string): Array<Promise<unknown>> {
     const key = this.mapKey(workspaceDir)
     const state = this.workspaces.get(key)
-    if (!state) return
+    if (!state) return []
 
     if (state.reloadTimer) {
       clearTimeout(state.reloadTimer)
@@ -239,17 +358,27 @@ export class PluginManager {
     state.watcher?.close()
     state.watcher = null
 
+    const pending: Array<Promise<unknown>> = []
     for (const plugin of state.plugins) {
       try {
-        void Promise.resolve(plugin.deactivate?.()).catch((error) => {
-          console.warn(`[Plugins] deactivate failed for ${plugin.info.id}:`, error)
-        })
+        const res = plugin.deactivate?.()
+        if (res && typeof (res as Promise<unknown>).then === 'function') {
+          pending.push(
+            Promise.resolve(res).catch((error) => {
+              console.warn(`[Plugins] deactivate failed for ${plugin.info.id}:`, error)
+            })
+          )
+        }
       } catch (error) {
         console.warn(`[Plugins] deactivate failed for ${plugin.info.id}:`, error)
+      }
+      if (plugin.entryPath) {
+        purgePluginRequireCache(plugin.directory, plugin.entryPath)
       }
     }
 
     this.workspaces.delete(key)
+    return pending
   }
 
   disposeAll(): void {
@@ -258,10 +387,17 @@ export class PluginManager {
     }
   }
 
+  async disposeAllAsync(): Promise<void> {
+    await Promise.allSettled(
+      [...this.workspaces.values()].map((state) => this.unloadAsync(state.workspaceDir))
+    )
+  }
+
   private loadPlugin(
     directory: string,
     fallbackId: string,
     enabledIds: string[] | null,
+    pinnedHashes: Record<string, string>,
     workspaceDir: string,
     seenIds: Set<string>
   ): LoadedPlugin {
@@ -312,6 +448,19 @@ export class PluginManager {
 
     if (!enabled) return plugin
 
+    // 代码哈希钉住校验：若磁盘内容在用户批准启用后被改写（如 git pull / Agent 修改），拒绝静默执行
+    const expectedHash = pinnedHashes[id]
+    if (expectedHash) {
+      const actualHash = computePluginDirectoryHash(directory)
+      if (actualHash !== expectedHash) {
+        plugin.info.enabled = false
+        plugin.info.error =
+          'Plugin files changed since approval; re-enable the plugin to trust the updated code.'
+        console.warn(`[Plugins] Hash mismatch for "${id}" in ${directory}; refusing auto-activation`)
+        return plugin
+      }
+    }
+
     try {
       this.activatePlugin(plugin, manifest, directory, workspaceDir)
     } catch (error) {
@@ -346,8 +495,11 @@ export class PluginManager {
       throw new Error('Plugin entry must stay inside its own directory')
     }
 
-    const load = this.options.requireModule ?? defaultRequire
-    const moduleExports = load(entryPath) as {
+    const moduleExports = (
+      this.options.requireModule
+        ? this.options.requireModule(entryPath)
+        : defaultRequire(entryPath, realRoot)
+    ) as {
       activate?: (api: PluginApi) => void
       deactivate?: () => void | Promise<void>
     }
@@ -416,6 +568,7 @@ export class PluginManager {
   }
 
   private readonly memoryEnabled = new Map<string, string[]>()
+  private readonly memoryHashes = new Map<string, Record<string, string>>()
 
   private stateFilePath(): string | null {
     return this.options.stateFilePath ?? null
@@ -431,7 +584,7 @@ export class PluginManager {
     return process.platform === 'win32' ? resolved.toLowerCase() : resolved
   }
 
-  private readStateStore(): Record<string, { enabledPlugins?: unknown }> {
+  private readStateStore(): Record<string, { enabledPlugins?: unknown; pluginHashes?: unknown }> {
     const storePath = this.stateFilePath()
     if (!storePath) return {}
     const result = readJsonWithBackup<Record<string, unknown>>(storePath)
@@ -439,7 +592,7 @@ export class PluginManager {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
     const workspaces = (raw as { workspaces?: unknown }).workspaces
     if (!workspaces || typeof workspaces !== 'object' || Array.isArray(workspaces)) return {}
-    return workspaces as Record<string, { enabledPlugins?: unknown }>
+    return workspaces as Record<string, { enabledPlugins?: unknown; pluginHashes?: unknown }>
   }
 
   /**
@@ -458,15 +611,36 @@ export class PluginManager {
     return entry.enabledPlugins.filter((id): id is string => typeof id === 'string')
   }
 
-  private writeEnabledIds(workspaceDir: string, ids: string[]): void {
+  private readPinnedHashes(workspaceDir: string): Record<string, string> {
+    const key = this.workspaceKey(workspaceDir)
+    if (!this.stateFilePath()) {
+      return this.memoryHashes.get(key) ?? {}
+    }
+    const entry = this.readStateStore()[key]
+    if (!entry || typeof entry !== 'object' || !entry.pluginHashes || typeof entry.pluginHashes !== 'object') {
+      return {}
+    }
+    const out: Record<string, string> = {}
+    for (const [id, hash] of Object.entries(entry.pluginHashes as Record<string, unknown>)) {
+      if (typeof hash === 'string' && hash) out[id] = hash
+    }
+    return out
+  }
+
+  private writeEnabledIds(
+    workspaceDir: string,
+    ids: string[],
+    pluginHashes: Record<string, string>
+  ): void {
     const key = this.workspaceKey(workspaceDir)
     const storePath = this.stateFilePath()
     if (!storePath) {
       this.memoryEnabled.set(key, [...ids])
+      this.memoryHashes.set(key, { ...pluginHashes })
       return
     }
     const workspaces = this.readStateStore()
-    workspaces[key] = { enabledPlugins: ids }
+    workspaces[key] = { enabledPlugins: ids, pluginHashes }
     writeJsonAtomicSync(storePath, { version: 1, workspaces })
   }
 

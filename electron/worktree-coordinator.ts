@@ -426,40 +426,62 @@ export class WorktreeCoordinator {
     const byPath = new Map(
       infos.map((info) => [canonicalizePath(info.path) ?? info.path, info])
     )
-    const views: WorktreeView[] = []
     const rootKey = canonicalizePath(state.repo.root) ?? state.repo.root
     const mainInfo = byPath.get(rootKey) ?? infos[0] ?? null
-    views.push(await toView(state, MAIN_WORKTREE_KEY, mainInfo, null, activeSessionId))
+    const managedRoot = canonicalizePath(path.join(state.workspaceDir, '.pi-workbench', 'worktrees'))
 
     let changed = (await pruneMissingRecords(state, infos)).length > 0
+
+    const viewInputs: Array<{
+      id: string
+      info: GitWorktreeInfo | null
+      record: GitWorktreeRecord | null
+    }> = [{ id: MAIN_WORKTREE_KEY, info: mainInfo, record: null }]
 
     const known = new Set<string>([rootKey])
     for (const [id, record] of Object.entries(state.data.worktrees)) {
       const target = canonicalizePath(path.join(state.workspaceDir, record.path))
       if (target) known.add(target)
       const info = target ? byPath.get(target) ?? null : null
-      views.push(await toView(state, id, info, record, activeSessionId))
+      viewInputs.push({ id, info, record })
     }
 
-    // 发现工作区内用户自己创建、尚未登记的工作树
+    // 发现工作区内尚未登记的工作树；若落在 .pi-workbench/worktrees/ 下且分支为 pi/*，说明是崩溃残留受管树，
+    // 必须恢复为 managed: true，否则 cleanupOrphans 永远无法回收（GIT-152）
     for (const info of infos) {
       if (info.prunable) continue
       const target = canonicalizePath(info.path) ?? info.path
       if (!target || known.has(target)) continue
       if (!isPathInWorkspace(state.workspaceDir, target)) continue
-      const id = makeWorktreeId(state, `ext-${path.basename(target)}`)
+      const rel = relativePath(state.workspaceDir, target)
+      const isManagedOrphan =
+        Boolean(
+          managedRoot &&
+            (target.startsWith(`${managedRoot}${path.sep}`) ||
+              (process.platform === 'win32' &&
+                target.toLowerCase().startsWith(`${managedRoot.toLowerCase()}${path.sep}`)))
+        ) && Boolean(info.branch?.startsWith('pi/'))
+      const id = makeWorktreeId(
+        state,
+        isManagedOrphan ? path.basename(target) : `ext-${path.basename(target)}`
+      )
       state.data.worktrees[id] = {
-        path: relativePath(state.workspaceDir, target),
-        managed: false,
+        path: rel,
+        managed: isManagedOrphan,
         branch: info.branch ?? '',
-        base: '',
+        base: isManagedOrphan ? mainInfo?.branch ?? state.repo.branch ?? '' : '',
         createdBySession: '',
         createdAt: new Date().toISOString(),
       }
       known.add(target)
-      views.push(await toView(state, id, info, state.data.worktrees[id], activeSessionId))
+      viewInputs.push({ id, info, record: state.data.worktrees[id] })
       changed = true
     }
+
+    // 并行拉取各工作树的 git status 与依赖状态，避免每轮对话串行 N 次 git.exe
+    const views = await Promise.all(
+      viewInputs.map((item) => toView(state, item.id, item.info, item.record, activeSessionId))
+    )
     // 只在登记变化时写盘：contextFor() 每条消息都会调 listWorktrees()
     if (changed) await persist(state)
     return views
@@ -702,8 +724,8 @@ export class WorktreeCoordinator {
         return { success: true, removed: false, dirty: true, worktreePath: target }
       }
       try {
-        // 工作树即将消失：先终止还在跑的依赖安装，避免往已经删掉的目录里写文件
-        state.deps.forget(target)
+        // 工作树即将消失：终止并等待依赖安装进程退出，避免 Windows 句柄占用导致 git worktree remove 失败
+        await state.deps.forgetAndWait(target)
         await gitRemoveWorktree(state.repo.root, target)
         const hasCommits = await branchHasNewCommits(state.repo.root, record.branch, record.base)
         if (record.branch && !hasCommits) await deleteBranch(state.repo.root, record.branch)
@@ -749,7 +771,7 @@ export class WorktreeCoordinator {
           continue
         }
         try {
-          state.deps.forget(target)
+          await state.deps.forgetAndWait(target)
           await gitRemoveWorktree(state.repo.root, target)
           const hasCommits = await branchHasNewCommits(state.repo.root, record.branch, record.base)
           if (record.branch && !hasCommits) await deleteBranch(state.repo.root, record.branch)

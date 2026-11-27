@@ -1045,10 +1045,10 @@ async function shutdownApplication(): Promise<void> {
         {
           name: 'workspace-tasks',
           timeoutMs: 400,
-          run: () => {
+          run: async () => {
             closeAllWorkspaceWatchers()
             repoSync.disposeAll()
-            pluginManager.disposeAll()
+            await pluginManager.disposeAllAsync()
           }
         },
         { name: 'terminals', timeoutMs: 400, run: () => terminalManager.closeAll() },

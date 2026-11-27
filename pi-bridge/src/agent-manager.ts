@@ -340,6 +340,8 @@ export class AgentManager {
   private seedPermissions = new Map<string, SessionPermission>()
   /** 当前 provider 的远端目录快照（D12/D26）：用于过滤内置快照里上游已下架的模型 */
   private remoteCatalogSnapshot: CatalogSnapshot | undefined = undefined
+  /** dispose 标记：防止在途 createRuntime 在 dispose() 后回插僵尸会话 */
+  private disposed = false
 
   private async syncRemoteCatalogSnapshot(providerId: string): Promise<void> {
     const store = this.config?.modelsStore
@@ -756,6 +758,7 @@ export class AgentManager {
    */
   async initialize(config: AgentConfig): Promise<{ success: boolean; error?: string }> {
     let initialized = false
+    this.disposed = false
     this.logger = config.logger ?? consoleAgentLogger
     try {
       await this.disposeAllRuntimes()
@@ -892,7 +895,7 @@ export class AgentManager {
   ): Promise<{ success: boolean; text?: string; context?: MessageContext; error?: string }> {
     try {
       const runtime = await this.ensureRuntime(sessionId)
-      if (runtime.isProcessing) {
+      if (this.isRuntimeBusy(runtime)) {
         return { success: false, error: 'Session is running; stop it before retrying.' }
       }
       const branch = runtime.sessionManager.getBranch()
@@ -939,7 +942,7 @@ export class AgentManager {
   ): Promise<{ success: boolean; history?: AgentMessage[]; error?: string }> {
     try {
       const runtime = await this.ensureRuntime(sessionId)
-      if (runtime.isProcessing) {
+      if (this.isRuntimeBusy(runtime)) {
         return { success: false, error: 'Session is running; stop it before switching branches.' }
       }
       const manager = runtime.sessionManager
@@ -1014,7 +1017,7 @@ export class AgentManager {
     }
     try {
       const runtime = await this.ensureRuntime(sessionId)
-      if (runtime.isProcessing) {
+      if (this.isRuntimeBusy(runtime)) {
         return { success: false, error: 'Session is running; stop it before approving the plan.' }
       }
       const plan = runtime.extras.plan
@@ -1316,7 +1319,12 @@ export class AgentManager {
 
   private isRuntimeBusy(runtime: SessionRuntime | undefined): boolean {
     if (!runtime) return false
-    return Boolean(runtime.isProcessing || runtime.sdkStreaming || (runtime.session as any)?.isStreaming)
+    return Boolean(
+      runtime.isProcessing ||
+        runtime.sdkStreaming ||
+        runtime.compactingPromise ||
+        (runtime.session as any)?.isStreaming
+    )
   }
 
   /** 运行中的会话 ID；配置保存前用于避免打断正在跑的轮次 */
@@ -1601,11 +1609,11 @@ export class AgentManager {
   }> {
     try {
       const runtime = await this.ensureRuntime(sessionId)
-      if (runtime.isProcessing) {
-        return { success: false, error: 'Session is running; wait for it to finish before compacting.' }
-      }
       if (runtime.compactingPromise) {
         return { success: false, error: 'Context compaction is already in progress.' }
+      }
+      if (this.isRuntimeBusy(runtime)) {
+        return { success: false, error: 'Session is running; wait for it to finish before compacting.' }
       }
       const prevEntryId = runtime.lastCompactionEntry?.id ?? runtime.lastCompactionEntryId
       const compactPromise = (async () => {
@@ -1660,7 +1668,7 @@ export class AgentManager {
       if (runtime.compactingPromise) {
         return { success: false, error: 'Context compaction is in progress.' }
       }
-      if (!runtime.isProcessing) {
+      if (!runtime.isProcessing && !runtime.sdkStreaming && !(runtime.session as any)?.isStreaming) {
         return { success: false, error: 'Session is not running.' }
       }
       const promptText = this.withImagePlaceholder(text, imageCheck.images.length)
@@ -2075,14 +2083,14 @@ export class AgentManager {
       lastCompactionEntry: null,
       compactingPromise: null,
     }
-    // 异步创建期间若该会话已被 deleteSession 删除，立即释放，防止回魂
-    if (this.deletedSessions.has(id)) {
+    // 异步创建期间若 manager 已 dispose 或会话已被删除，立即释放防止回魂
+    if (this.disposed || this.deletedSessions.has(id)) {
       try {
         runtime.session.dispose()
       } catch {
         // ignore
       }
-      throw new Error('Session was deleted.')
+      throw new Error(this.disposed ? 'Agent manager was disposed.' : 'Session was deleted.')
     }
     runtime.unsubscribe = this.subscribeToSessionEvents(runtime)
     planContext.runtime = runtime
@@ -2226,7 +2234,7 @@ export class AgentManager {
     if (!pending) return false
     if (this.runtimes.get(runtime.id) !== runtime) return false
     if (this.rebinding.has(runtime.id)) return false
-    if (runtime.isProcessing) return false
+    if (this.isRuntimeBusy(runtime)) return false
 
     const id = runtime.id
     const oldRoot = runtime.sessionManager.getCwd()
@@ -2235,16 +2243,19 @@ export class AgentManager {
       return true
     }
 
-    const file = await this.resolvePersistedSessionFile(runtime)
+    // 必须在首个 await（resolvePersistedSessionFile）前同步加锁并登记 rebindingPromises，
+    // 否则排队中的 chat() 可在 await 间隙启动并被中途 dispose
+    this.rebinding.add(id)
+    this.pendingRoots.delete(id)
     const pendingTitle = runtime.pendingTitle
     const sessionName = runtime.sessionManager.getSessionName()
     // 迁移跨轮常驻 traceSinks，否则云端或工具订阅方在切工作树后静默失明
     const preservedSinks = [...runtime.traceSinks]
 
-    this.rebinding.add(id)
-    this.pendingRoots.delete(id)
     const task = (async (): Promise<boolean> => {
+      let file: string | null = null
       try {
+        file = await this.resolvePersistedSessionFile(runtime)
         await this.disposeRuntime(runtime)
         const manager = this.openManagerForRoot(id, file, pending.root)
         if (manager.getSessionId() !== id) {
@@ -2675,6 +2686,19 @@ export class AgentManager {
     }
     const chatImages = imageCheck.images
 
+    // 轮次边界若有在途或待应用的切工作树，必须先等重建完成再置 isProcessing，避免挤掉切换或被中途 dispose
+    const targetId = sessionId ?? this.lastSessionId
+    if (targetId) {
+      const rebinding = this.rebindingPromises.get(targetId)
+      if (rebinding) {
+        await rebinding.catch(() => undefined)
+      }
+      const existingBeforeTurn = this.runtimes.get(targetId)
+      if (existingBeforeTurn && this.pendingRoots.has(targetId) && !this.isRuntimeBusy(existingBeforeTurn)) {
+        await this.applyPendingRoot(existingBeforeTurn).catch(() => undefined)
+      }
+    }
+
     // 已有运行时时同步置位，避免 dispose 在 await 间隙漏掉正在启动的请求
     let runtime: SessionRuntime | null = sessionId
       ? this.runtimes.get(sessionId) ?? null
@@ -2683,7 +2707,7 @@ export class AgentManager {
         : null
 
     if (runtime) {
-      if (runtime.isProcessing) {
+      if (runtime.isProcessing || runtime.sdkStreaming || (runtime.session as any)?.isStreaming) {
         return {
           success: false,
           error: 'This session is currently processing another request.',
@@ -2714,7 +2738,7 @@ export class AgentManager {
           error: 'Agent not initialized. Please initialize first.',
         }
       }
-      if (runtime.isProcessing) {
+      if (runtime.isProcessing || runtime.sdkStreaming || (runtime.session as any)?.isStreaming) {
         return {
           success: false,
           error: 'This session is currently processing another request.',
@@ -3273,9 +3297,19 @@ export class AgentManager {
    * 清理所有会话与共享资源
    */
   async dispose() {
+    this.disposed = true
+    const inflight = [
+      ...this.creatingRuntimes.values(),
+      ...this.rebindingPromises.values(),
+    ]
+    if (inflight.length > 0) {
+      await Promise.allSettled(inflight)
+    }
     await this.disposeAllRuntimes()
     this.settledTitles.clear()
     this.creatingRuntimes.clear()
+    this.rebindingPromises.clear()
+    this.rebinding.clear()
     this.deletedSessions.clear()
     this.config = null
     this.modelRuntime = null

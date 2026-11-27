@@ -292,13 +292,24 @@ export async function getRepoInfo(workspaceDir: string): Promise<GitRepoInfo | n
   const root = canonicalizePath(rootResult.stdout.trim())
   if (!root) return null
 
-  const gitDirResult = await git(root, ['rev-parse', '--absolute-git-dir'])
-  const commonDirResult = await git(root, ['rev-parse', '--git-common-dir'])
-  const bareResult = await git(root, ['rev-parse', '--is-bare-repository'])
-  const branchResult = await git(root, ['symbolic-ref', '--quiet', '--short', 'HEAD'])
-  const headResult = await git(root, ['rev-parse', 'HEAD'])
-  const remoteResult = await git(root, ['remote', 'get-url', 'origin'])
-  const emailResult = await git(root, ['config', 'user.email'])
+  // 7 条只读 git 查询互不依赖，并行执行避免启动/切会话串行拉起 7 次 git.exe
+  const [
+    gitDirResult,
+    commonDirResult,
+    bareResult,
+    branchResult,
+    headResult,
+    remoteResult,
+    emailResult,
+  ] = await Promise.all([
+    git(root, ['rev-parse', '--absolute-git-dir']),
+    git(root, ['rev-parse', '--git-common-dir']),
+    git(root, ['rev-parse', '--is-bare-repository']),
+    git(root, ['symbolic-ref', '--quiet', '--short', 'HEAD']),
+    git(root, ['rev-parse', 'HEAD']),
+    git(root, ['remote', 'get-url', 'origin']),
+    git(root, ['config', 'user.email']),
+  ])
 
   const gitDir = gitDirResult.ok ? canonicalizePath(gitDirResult.stdout.trim()) : null
   const commonDirRaw = commonDirResult.ok ? commonDirResult.stdout.trim() : ''
@@ -327,13 +338,27 @@ export async function getRepoInfo(workspaceDir: string): Promise<GitRepoInfo | n
   }
 }
 
+const GITHUB_OWNER_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/
+const GITHUB_REPO_RE = /^[A-Za-z0-9._-]{1,100}$/
+
 export function parseGithubRemote(remoteUrl: string | null): GithubRepoRef | null {
   if (!remoteUrl) return null
   const match = remoteUrl.match(
-    /github\.com[:/]+([^/\s]+)\/([^/\s]+?)(?:\.git)?(?:[/\s]|$)/i
+    /github\.com[:/]+([^/\s?#%]+)\/([^/\s?#%]+?)(?:\.git)?(?:[/\s]|$)/i
   )
   if (!match) return null
-  return { owner: match[1], repo: match[2] }
+  const owner = match[1]
+  const repo = match[2]
+  if (
+    !GITHUB_OWNER_RE.test(owner) ||
+    !GITHUB_REPO_RE.test(repo) ||
+    repo === '.' ||
+    repo === '..' ||
+    repo.includes('..')
+  ) {
+    return null
+  }
+  return { owner, repo }
 }
 
 export async function listWorktrees(repoRoot: string): Promise<GitWorktreeInfo[]> {
@@ -472,13 +497,18 @@ export async function createWorktree(
   const safeBranch = validateGitRef(branch, 'branch name')
   const safeBase = validateGitRef(base, 'base ref')
   await fs.mkdir(path.dirname(worktreePath), { recursive: true })
-  const add = await git(repoRoot, ['worktree', 'add', '-b', safeBranch, worktreePath, safeBase])
+  const add = await git(repoRoot, ['worktree', 'add', '-b', safeBranch, '--', worktreePath, safeBase])
   if (!add.ok) {
-    // 分支已存在时退化为直接检出该分支
-    const fallback = await git(repoRoot, ['worktree', 'add', worktreePath, safeBranch])
-    if (!fallback.ok) {
-      throw new Error(fallback.stderr.trim() || add.stderr.trim() || 'git worktree add failed')
+    // 仅允许在受管 pi/ 分支明确已存在且未被其他工作树占用时退化检出，避免静默劫持用户同名旧分支
+    if (safeBranch.startsWith('pi/')) {
+      const exists = await git(repoRoot, ['show-ref', '--verify', '--quiet', `refs/heads/${safeBranch}`])
+      if (exists.ok) {
+        const fallback = await git(repoRoot, ['worktree', 'add', '--', worktreePath, safeBranch])
+        if (fallback.ok) return
+        throw new Error(fallback.stderr.trim() || add.stderr.trim() || 'git worktree add failed')
+      }
     }
+    throw new Error(add.stderr.trim() || 'git worktree add failed')
   }
 }
 
@@ -521,7 +551,30 @@ export async function deleteBranch(repoRoot: string, branch: string): Promise<vo
 
 export async function checkout(worktreePath: string, branch: string): Promise<void> {
   const safeBranch = validateGitRef(branch, 'branch name')
-  const result = await git(worktreePath, ['checkout', safeBranch])
+  // 若目标仅是远程跟踪分支（refs/remotes/<remote>/<name>），自动建本地跟踪分支避免掉入 detached HEAD
+  const [localRef, remoteRef] = await Promise.all([
+    git(worktreePath, ['show-ref', '--verify', '--quiet', `refs/heads/${safeBranch}`]),
+    git(worktreePath, ['show-ref', '--verify', '--quiet', `refs/remotes/${safeBranch}`]),
+  ])
+  if (!localRef.ok && remoteRef.ok) {
+    const slash = safeBranch.indexOf('/')
+    const localName = slash > 0 ? safeBranch.slice(slash + 1) : ''
+    if (localName) {
+      const localExists = await git(worktreePath, [
+        'show-ref',
+        '--verify',
+        '--quiet',
+        `refs/heads/${localName}`,
+      ])
+      const args = localExists.ok
+        ? ['checkout', localName, '--']
+        : ['checkout', '--track', `refs/remotes/${safeBranch}`]
+      const tracked = await git(worktreePath, args)
+      if (!tracked.ok) throw new Error(tracked.stderr.trim() || 'git checkout failed')
+      return
+    }
+  }
+  const result = await git(worktreePath, ['checkout', safeBranch, '--'])
   if (!result.ok) throw new Error(result.stderr.trim() || 'git checkout failed')
 }
 
@@ -533,12 +586,17 @@ export async function mergeBranch(
   const safeBranch = validateGitRef(branch, 'branch name')
   const args =
     strategy === 'squash'
-      ? ['merge', '--squash', safeBranch]
+      ? ['merge', '--squash', '--', safeBranch]
       : strategy === 'rebase'
-        ? ['rebase', safeBranch]
-        : ['merge', '--no-ff', safeBranch]
+        ? ['rebase', '--', safeBranch]
+        : ['merge', '--no-ff', '--', safeBranch]
   const result = await git(worktreePath, args)
   if (!result.ok) throw new Error(result.stderr.trim() || 'git merge failed')
+}
+
+function normalizeLogLimit(limit: number): string {
+  const numeric = Number.isFinite(limit) ? Math.floor(limit) : 80
+  return String(Math.max(1, Math.min(500, numeric)))
 }
 
 export async function logCommits(
@@ -548,7 +606,7 @@ export async function logCommits(
   all = false
 ): Promise<GitCommitInfo[]> {
   const format = ['%H', '%h', '%an', '%ae', '%aI', '%s', '%D', '%P'].join('%x00')
-  const args = ['log', `--format=${format}`, '-n', String(Math.max(1, Math.min(500, limit)))]
+  const args = ['log', `--format=${format}`, '-n', normalizeLogLimit(limit)]
   if (all) args.push('--branches', '--remotes', '--tags', 'HEAD', '--topo-order')
   else if (branch) args.push(validateGitRef(branch, 'branch name'), '--')
   const result = await git(worktreePath, args)
@@ -594,7 +652,7 @@ export async function logCommitStats(
   const scope: string[] = []
   if (all) scope.push('--branches', '--remotes', '--tags', 'HEAD', '--topo-order')
   else if (branch) scope.push(validateGitRef(branch, 'branch name'))
-  const count = String(Math.max(1, Math.min(500, limit)))
+  const count = normalizeLogLimit(limit)
   const [numstat, nameStatus] = await Promise.all([
     git(worktreePath, ['log', '-n', count, '--numstat', '--format=%H', ...scope, '--']),
     git(worktreePath, ['log', '-n', count, '--name-status', '--format=%H', ...scope, '--']),
@@ -649,7 +707,7 @@ export async function createBranch(repoRoot: string, name: string, sha: string):
     throw new Error('Invalid branch name')
   }
   if (!/^[0-9a-f]{4,64}$/i.test(sha)) throw new Error('Invalid commit')
-  const result = await git(repoRoot, ['branch', trimmed, sha])
+  const result = await git(repoRoot, ['branch', '--', trimmed, sha])
   if (!result.ok) throw new Error(result.stderr.trim() || 'git branch failed')
 }
 
@@ -661,9 +719,9 @@ export async function commitDetail(
   const format = ['%H', '%h', '%an', '%ae', '%aI', '%s', '%D', '%P', '%b'].join('%x00')
   // 三条查询互不依赖，并行执行可省掉约一半的进程等待
   const [meta, filesResult, patchResult] = await Promise.all([
-    git(worktreePath, ['show', '-s', `--format=${format}`, sha]),
-    git(worktreePath, ['show', '--name-status', '--format=', sha]),
-    git(worktreePath, ['show', '--format=', '--patch', '--no-ext-diff', sha]),
+    git(worktreePath, ['show', '-s', `--format=${format}`, sha, '--']),
+    git(worktreePath, ['show', '--name-status', '--format=', sha, '--']),
+    git(worktreePath, ['show', '--format=', '--patch', '--no-ext-diff', sha, '--']),
   ])
   if (!meta.ok) return null
   const fields = meta.stdout.split('\u0000')

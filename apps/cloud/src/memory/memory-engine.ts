@@ -281,14 +281,18 @@ export async function runDreamConsolidation(
     return null
   }
 
+  // 分批整理（每批最多 50 条）并提升 maxTokens 上限，避免 200 条全部塞进 1024 token 输出被截断
+  const batch = autoItems.slice(0, 50)
+  const eligibleIds = new Set(batch.map((m) => m.id))
+
   const userPrompt = [
     manualItems.length > 0
       ? `Manual memories (READ-ONLY, NEVER remove or contradict):\n${manualItems.map((m) => `- [${m.id}] (${m.kind}) ${m.content}`).join('\n')}`
       : 'Manual memories: (none)',
-    `Auto/dream memories eligible for consolidation:\n${autoItems.map((m) => `- [${m.id}] (${m.kind}) ${m.content}`).join('\n')}`,
+    `Auto/dream memories eligible for consolidation (${batch.length} of ${autoItems.length}):\n${batch.map((m) => `- [${m.id}] (${m.kind}) ${m.content}`).join('\n')}`,
   ].join('\n\n')
 
-  const raw = await complete(DREAM_SYSTEM_PROMPT, userPrompt, { maxTokens: 1024, timeoutMs: 25_000 })
+  const raw = await complete(DREAM_SYSTEM_PROMPT, userPrompt, { maxTokens: 4096, timeoutMs: 25_000 })
   if (!raw) return null
   const parsed = parseJsonObject<{
     summary?: unknown
@@ -298,9 +302,13 @@ export async function runDreamConsolidation(
   if (!parsed) return null
 
   const removeIds = Array.isArray(parsed.removeIds)
-    ? parsed.removeIds.filter((id): id is string => typeof id === 'string')
+    ? parsed.removeIds.filter((id): id is string => typeof id === 'string' && eligibleIds.has(id))
     : []
   const upsert = Array.isArray(parsed.upsert) ? parsed.upsert : []
+  // 截断或异常回复防护：若一次要求删除超过半数（且 >5 条）自动记忆却无任何新合并条目，拒绝落地防误删
+  if (removeIds.length > Math.max(5, Math.ceil(batch.length * 0.5)) && upsert.length === 0) {
+    return null
+  }
   const applied = await store.applyDreamConsolidation({ removeIds, upsert }, now)
   const merged = Math.min(applied.added, applied.removed)
   const summary =

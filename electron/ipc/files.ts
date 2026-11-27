@@ -26,12 +26,18 @@ export interface FilesIpcContext {
 const BINARY_PROBE_BYTES = 8192
 /** 文本文件读取上限：防止超大单文件一次读入主进程内存造成 OOM */
 const MAX_TEXT_FILE_BYTES = 32 * 1024 * 1024
-/** 禁止通过 shell.openPath 直接执行的可执行/脚本/快捷方式后缀 */
+/** 禁止通过 shell.openPath 直接执行的可执行/脚本/快捷方式/宏/镜像后缀 */
 const BLOCKED_EXTERNAL_OPEN_EXTENSIONS = new Set([
   '.exe', '.msi', '.msp', '.bat', '.cmd', '.com', '.ps1', '.psm1', '.psd1',
   '.vbs', '.vbe', '.js', '.jse', '.wsf', '.wsh', '.scr', '.pif', '.lnk',
   '.hta', '.reg', '.cpl', '.msc', '.jar', '.sh', '.bash', '.zsh', '.command',
   '.app', '.dmg', '.pkg', '.appimage', '.run',
+  // Windows 快捷方式/脚本/帮助/镜像/带宏文档
+  '.url', '.scf', '.inf', '.chm', '.iso', '.vhd', '.vhdx', '.gadget',
+  '.msh', '.msh1', '.msh2', '.mshxml', '.settingcontent-ms', '.library-ms', '.search-ms',
+  '.py', '.pyw', '.rb', '.pl', '.docm', '.xlsm', '.pptm', '.dotm', '.xltm',
+  // macOS / Linux 自动化与桌面启动器
+  '.workflow', '.scpt', '.scptd', '.applescript', '.tool', '.terminal', '.action', '.desktop',
 ])
 
 /** 头部出现 NUL 字节即视为二进制：文本文件不会包含它 */

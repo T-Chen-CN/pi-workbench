@@ -54,6 +54,13 @@ export function isPiOffline(env: NodeJS.ProcessEnv = process.env): boolean {
   return normalized !== '' && normalized !== '0' && normalized !== 'false'
 }
 
+/** 同步规范化进程级 `PI_OFFLINE`：SDK 将任意已定义的 `PI_OFFLINE` 都视为离线，因此 `0`/`false`/空值必须删除 */
+export function normalizePiOfflineEnv(env: NodeJS.ProcessEnv = process.env): void {
+  if (typeof env.PI_OFFLINE === 'string' && !isPiOffline(env)) {
+    delete env.PI_OFFLINE
+  }
+}
+
 /** 是否允许后台自动联网刷新模型目录（D6：`PI_OFFLINE` 优先于应用设置） */
 export function isCatalogNetworkAllowed(): boolean {
   if (isPiOffline()) return false
@@ -110,6 +117,7 @@ function credentialsStore() {
 
 /** 常驻目录运行时：只做模型清单 / 目录刷新 / 登录，不承载会话 */
 async function getCatalogRuntime(): Promise<ModelRuntime> {
+  normalizePiOfflineEnv()
   if (catalogRuntime) return catalogRuntime
   if (catalogRuntimePromise) return catalogRuntimePromise
   const task = (async () => {

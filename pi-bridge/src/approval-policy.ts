@@ -155,6 +155,7 @@ export function categorizeTool(toolName: string): ToolCategory {
       return 'read'
     case 'write':
     case 'edit':
+    case 'switch_worktree':
       return 'write'
     case 'bash':
     case 'powershell':
@@ -178,10 +179,22 @@ export interface ApprovalDetails {
 const COMMAND_TEXT_LIMIT = 16_000
 const PREVIEW_LIMIT = 280
 
-/** 剥离 ANSI 转义序列，避免审批卡展示命令时被控制字符伪装隐藏载荷 */
-function stripAnsi(value: string): string {
-  // eslint-disable-next-line no-control-regex
-  return value.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '')
+/** 剥离 ANSI/OSC 转义序列、危险控制字符与 Unicode BiDi 欺骗字符，避免审批卡展示被视觉伪装 */
+export function sanitizeApprovalText(value: string): string {
+  return (
+    value
+      // OSC 序列（BEL 或 ST 终止）
+      // eslint-disable-next-line no-control-regex
+      .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, '')
+      // CSI / 2-byte ESC 序列
+      // eslint-disable-next-line no-control-regex
+      .replace(/\u001b(?:\[[0-9;?]*[ -/]*[@-~]|[@-Z\\-_])/g, '')
+      // 清除 \r、退格及其他非 \n/\t 控制字符
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '')
+      // 清除 Unicode BiDi 方向覆盖/隔离控制字符（Trojan Source 欺骗）
+      .replace(/[\u202a-\u202e\u2066-\u2069\u200e\u200f\u061c]/g, '')
+  )
 }
 
 function truncate(value: string, limit: number): string {
@@ -192,17 +205,19 @@ function truncate(value: string, limit: number): string {
 /**
  * 生成审批卡展示用的参数摘要。
  * 刻意不包含完整 write 内容：审批只需要判断风险，完整内容留给 Diff 审阅。
- * 命令文本保留高上限（16KB）并剥离 ANSI，防止长注释前缀隐藏尾部恶意命令。
+ * 命令文本保留高上限（16KB）并剥离控制/BiDi 字符，防止隐藏或倒序欺骗载荷。
  */
 export function buildApprovalDetails(toolName: string, args: unknown): ApprovalDetails {
   const value = (args ?? {}) as Record<string, any>
   const details: ApprovalDetails = {}
-  if (typeof value.path === 'string' && value.path) details.path = value.path
+  if (typeof value.path === 'string' && value.path) {
+    details.path = sanitizeApprovalText(value.path)
+  }
   if (typeof value.command === 'string' && value.command) {
-    details.command = truncate(stripAnsi(value.command), COMMAND_TEXT_LIMIT)
+    details.command = truncate(sanitizeApprovalText(value.command), COMMAND_TEXT_LIMIT)
   }
   if (toolName === 'write' && typeof value.content === 'string') {
-    details.preview = truncate(value.content, PREVIEW_LIMIT)
+    details.preview = truncate(sanitizeApprovalText(value.content), PREVIEW_LIMIT)
   }
   if (toolName === 'edit' && Array.isArray(value.edits)) {
     details.editCount = value.edits.length

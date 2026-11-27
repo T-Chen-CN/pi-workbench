@@ -76,14 +76,25 @@ export function createFileModelsStore(options: FileModelsStoreOptions): TrackedM
   /** 整文件读-改-写必须串行，否则两个 provider 的刷新会互相覆盖 */
   let writeChain: Promise<void> = Promise.resolve()
 
-  async function readAll(): Promise<StoredCatalogs> {
+  async function readAll(strict = false): Promise<StoredCatalogs> {
     let raw: string
-    try {
-      raw = await fs.readFile(filePath, 'utf-8')
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code
-      if (code !== 'ENOENT') logger.warn('[ModelsStore] 读取失败，按空缓存处理:', error)
-      return {}
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        raw = await fs.readFile(filePath, 'utf-8')
+        break
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        if (code === 'ENOENT') return {}
+        const transient = code === 'EBUSY' || code === 'EPERM' || code === 'EACCES'
+        if (transient && attempt < 5) {
+          await new Promise((resolve) => setTimeout(resolve, 15 * (attempt + 1)))
+          continue
+        }
+        logger.warn('[ModelsStore] 读取失败:', error)
+        // 写路径遇到非 ENOENT 的磁盘/锁错误必须抛出，避免误当空缓存覆盖其余供应商记录
+        if (strict) throw error
+        return {}
+      }
     }
     try {
       return normalize(JSON.parse(raw))
@@ -169,8 +180,8 @@ export function createFileModelsStore(options: FileModelsStoreOptions): TrackedM
     ): Promise<void> {
       writeOptions?.signal?.throwIfAborted()
       return serialize(async () => {
-        // 锁内重读，合并其他 provider 在这期间的刷新
-        const catalogs = await readAll()
+        // 锁内重读（strict=true），合并其他 provider 在这期间的刷新；遇锁错误不得清盘
+        const catalogs = await readAll(true)
         catalogs[providerId] = entry
         await writeFile(catalogs)
       })
@@ -179,7 +190,7 @@ export function createFileModelsStore(options: FileModelsStoreOptions): TrackedM
     async delete(providerId: string, deleteOptions?: ModelsStoreOperationOptions): Promise<void> {
       deleteOptions?.signal?.throwIfAborted()
       return serialize(async () => {
-        const catalogs = await readAll()
+        const catalogs = await readAll(true)
         if (!(providerId in catalogs)) return
         delete catalogs[providerId]
         await writeFile(catalogs)

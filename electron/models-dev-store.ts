@@ -32,6 +32,7 @@ export interface ModelsDevRefreshOptions {
 let cachedFilePath: string | null = null
 let memorySnapshot: ModelsDevCacheSnapshot | null = null
 let diskLoaded = false
+let inflightDiskRead: Promise<ModelsDevCacheSnapshot | null> | null = null
 let inflightRefresh: Promise<ModelsDevCacheSnapshot | null> | null = null
 
 export function modelsDevCacheFilePath(): string {
@@ -44,6 +45,7 @@ function syncCacheSlot(): string {
     cachedFilePath = filePath
     memorySnapshot = null
     diskLoaded = false
+    inflightDiskRead = null
     inflightRefresh = null
   }
   return filePath
@@ -54,6 +56,7 @@ export function resetModelsDevStore(): void {
   cachedFilePath = null
   memorySnapshot = null
   diskLoaded = false
+  inflightDiskRead = null
   inflightRefresh = null
 }
 
@@ -61,14 +64,30 @@ export function resetModelsDevStore(): void {
 export async function getModelsDevSnapshot(): Promise<ModelsDevCacheSnapshot | null> {
   const filePath = syncCacheSlot()
   if (diskLoaded) return memorySnapshot
-  diskLoaded = true
-  try {
-    const raw = await fs.readFile(filePath, 'utf-8')
-    memorySnapshot = parseModelsDevCacheSnapshot(JSON.parse(raw))
-  } catch {
-    memorySnapshot = null
-  }
-  return memorySnapshot
+  if (inflightDiskRead) return inflightDiskRead
+  let readPromise: Promise<ModelsDevCacheSnapshot | null> | null = null
+  readPromise = (async () => {
+    try {
+      const raw = await fs.readFile(filePath, 'utf-8')
+      if (cachedFilePath === filePath) {
+        memorySnapshot = parseModelsDevCacheSnapshot(JSON.parse(raw))
+      }
+    } catch {
+      if (cachedFilePath === filePath) {
+        memorySnapshot = null
+      }
+    } finally {
+      if (cachedFilePath === filePath) {
+        diskLoaded = true
+      }
+      if (inflightDiskRead === readPromise) {
+        inflightDiskRead = null
+      }
+    }
+    return cachedFilePath === filePath ? memorySnapshot : null
+  })()
+  inflightDiskRead = readPromise
+  return readPromise
 }
 
 /**
