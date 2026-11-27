@@ -43,7 +43,7 @@ npm run build      # 渲染层 + bridge + 主进程
 
 **Never**
 - 渲染进程直接碰 Node / fs（`nodeIntegration` 关闭，ESLint 禁止引入 `electron` / `node:*`，只能走 `window.electronAPI`）。
-- 把 `app.getPath('userData' | 'home' | 'documents' | 'appData')` 当数据目录（macOS 打包版是唯一例外；目录策略变更见 `BACKLOG.md` D-01）。
+- 绕过 `electron/app-paths.ts` 自行拼装数据目录，或把运行期数据散落到 `~/.pi` / `%LOCALAPPDATA%` 等第三处目录（全机严格两目录：程序安装目录 + 唯一数据目录 `getAppDir()`；仅含 `portable` 标记的便携版退回单目录）。
 - API Key 明文进仓库、配置、日志或工作区（只允许 `enc:` + safeStorage）。
 - 引入 Tauri / Redux / CSS Modules / Webpack；用 emoji 当图标；写 `gray-*` `blue-*` `red-*` 调色板类或 `dark:` 变体。
 - 在组件里硬编码十六进制色值、任意字号、`uppercase`、`tracking-[…]`、`leading-[…]`。
@@ -51,7 +51,6 @@ npm run build      # 渲染层 + bridge + 主进程
 **Ask first**
 - 改 [DESIGN_SYSTEM](docs/design/DESIGN_SYSTEM.md)（设计唯一事实源，新增例外必须先确认）。
 - 新增 / 升级依赖、改 `package.json` 的 `build` 段、改 `.github/workflows`。
-- 新增运行时数据目录（必须同步 `PROTECTED_TOP_LEVEL`，否则更新会把目录当程序文件删掉）。
 - 改会话记录格式、`session-git.json` 格式、IPC 频道名（都有落盘或跨进程兼容约束）。
 
 **Always**
@@ -67,10 +66,10 @@ npm run build      # 渲染层 + bridge + 主进程
 | Pi Agent 仍在主进程运行（禁止本地 HTTP 服务承载 Agent）；重 CPU 非 Agent 解析（文档解析、仓库地图扫描）走 `worker_threads` | [agent-runtime](docs/agent/agent-runtime.md) |
 | 权限是安全边界：`readonly` 用 `deny` 而不是 `ask`；审批超时与通道缺失一律拒绝（fail-closed）；会话是权限的唯一权威；默认禁用仓库级 `.pi/extensions`（`projectTrusted: false`） | [agent-runtime](docs/agent/agent-runtime.md) |
 | 历史、实时轮末对账与导出的唯一真相源是会话记录（JSONL + `parentId` 分支），经 `pi-bridge/src/session-view.ts` `deriveMessages` 统一投影 | [ADR-003](docs/decisions/ADR-003-session-record-single-source.md) |
-| 便携式目录 `{appDir}/{config,cache,data,logs}`；`setPath('userData')` 必须早于单实例锁；Pi SDK 目录靠环境变量固定 | [paths-and-storage](docs/agent/paths-and-storage.md) |
+| 严格两目录模型（程序目录 + 唯一数据目录 `<appData>/pi-workbench`，含 `config/cache/data/logs`）；免安装便携 `.zip` 靠根级 `portable` 标记切单目录；`setPath('userData')` 必须早于单实例锁；Pi SDK 目录靠环境变量固定 | [paths-and-storage](docs/agent/paths-and-storage.md) |
 | 退出只在 `will-quit` 收尾：每步超时 + 7.5 s 看门狗 `app.exit(0)`（未保存弹窗期间暂停），不再二次 `app.quit()`；托盘最后销毁；子进程登记 `child-registry` 统一先杀树再杀父 | [paths-and-storage](docs/agent/paths-and-storage.md) |
 | 多工作区是常驻视图：切换只 `visibility: hidden` + `inert`，不卸载不 reset；关闭标签是唯一回收入口 | [paths-and-storage](docs/agent/paths-and-storage.md) |
-| 更新只替换程序文件：`config/ data/ logs/ cache/` 受保护，删除靠 `installer-manifest` 清单 | [BUILD_AND_PACKAGE §4.1](docs/guides/BUILD_AND_PACKAGE.md) |
+| 安装版更新走标准替换（数据目录在安装目录外绝不被触碰）；Windows 同时发布 Setup `.exe`（自动差分更新）与 Portable `.zip`（引导手动下载） | [BUILD_AND_PACKAGE §4.1](docs/guides/BUILD_AND_PACKAGE.md) |
 | 面板可拆成独立窗口（`window.open('about:blank')` + 纯 DOM React Portal，无 `preload` 继承）；Windows/Linux 用原生 `titleBarStyle: 'hidden' + titleBarOverlay`；主窗口 `X` 默认收托盘 | [panels-and-windows](docs/agent/panels-and-windows.md) |
 | Git 工作树会话：切换在**轮次边界**生效，绑定关系写 `.pi-workbench/session-git.json` | [git-and-worktrees](docs/agent/git-and-worktrees.md) |
 

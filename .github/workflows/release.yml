@@ -55,13 +55,19 @@ jobs:
           cache: npm
 
       - run: npm ci
+      - run: npm run build:bridge
       - run: npm run type-check
-      - run: npm run lint
+      - run: npm run build:cloud
       - run: npm test
+      - run: npm run lint
       - run: npm run build
 
       - name: Build installers (no publish)
         run: npx electron-builder --${{ matrix.platform }} --publish never
+
+      - name: Build Windows portable zip
+        if: matrix.platform == 'win'
+        run: node scripts/build-win-portable.mjs
 
       - uses: actions/upload-artifact@v4
         with:
@@ -70,6 +76,7 @@ jobs:
           path: |
             release/*.exe
             release/*.exe.blockmap
+            release/*.zip
             release/*.dmg
             release/*.AppImage
             release/*.AppImage.blockmap

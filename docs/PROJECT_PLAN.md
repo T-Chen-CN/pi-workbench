@@ -137,7 +137,7 @@ Electron 44（内置 Node 24）· React 19 · TypeScript 5.9 · Vite 5 · Zustan
 | --- | --- | --- |
 | 桌面框架 | Electron 44 | 生态成熟；内置 Node 24 |
 | 状态管理 | Zustand | 轻量、无样板；按域拆分 store |
-| 数据位置 | 便携式应用目录 | 可整体迁移、无外部依赖（macOS 例外见 [BUILD_AND_PACKAGE §6](./guides/BUILD_AND_PACKAGE.md)） |
+| 数据位置 | 严格两目录（程序目录 + `<appData>/pi-workbench`）+ 独立便携 `.zip` | 程序与数据彻底分离、更新安全不误删，同时保留免安装绿色版（见 [BUILD_AND_PACKAGE §6](./guides/BUILD_AND_PACKAGE.md)） |
 | Agent 集成 | pi-coding-agent SDK | 内置工具与会话管理，避免自研 Agent 循环 |
 | Agent 工具文件访问 | 主进程直连 fs | SDK 设计如此；边界靠进程隔离 + 审批 |
 | 供应商配置 | 8 家内置预设 + Pi catalog + OAuth / safeStorage | 避免脆弱自定义端点，统一模型能力与凭证加密 |

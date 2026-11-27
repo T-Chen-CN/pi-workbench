@@ -4,46 +4,44 @@
 > **什么时候读**：新增数据文件 / 目录、动 `app-paths.ts` 或启动顺序之前
 > **什么时候要改**：目录布局、持久化字段、启动期顺序约束变化时
 
-> 便携式架构的完整约束：应用目录怎么算、启动顺序为什么不能动、哪些状态落盘、哪些只在内存。
-> 打包相关的目录布局见 [BUILD_AND_PACKAGE §6](../guides/BUILD_AND_PACKAGE.md)。
+> 严格两目录架构与可选便携版的完整约束：唯一数据目录怎么算、启动顺序为什么不能动、哪些状态落盘、哪些只在内存。
+> 打包相关的安装版 / 便携版布局见 [BUILD_AND_PACKAGE §6](../guides/BUILD_AND_PACKAGE.md)。
 
-## 1. 应用目录
+## 1. 应用目录（严格两目录 + 可选便携模式）
 
-唯一实现是 `electron/app-paths.ts` 的 `getAppDir()`，按顺序判断：
+唯一实现是 `electron/app-paths.ts` 的 `resolveAppPaths()`（对外暴露 `getAppDir()` / `getInstallDir()` / `isPortableMode()`），按顺序判断：
 
-| 场景 | 结果 |
-| --- | --- |
-| `process.env.APPIMAGE` 存在 | `.AppImage` 文件所在目录（AppImage 挂载点只读） |
-| 开发模式（`!app.isPackaged`） | `app.getAppPath()`，即仓库根（**不是** `process.cwd()`） |
-| macOS 打包版 | `~/Library/Application Support/pi-workbench` |
-| Windows / Linux 打包版 | `path.dirname(app.getPath('exe'))` |
+| 场景 | 数据目录 `getAppDir()` | 说明 |
+| --- | --- | --- |
+| 开发模式（`!app.isPackaged`） | `app.getAppPath()`（仓库根） | 不依赖 `process.cwd()` |
+| 打包版传入 `--data-dir=<path>` | 指定目录（便携模式） | 便于测试或自定义隔离 |
+| 打包版（非 macOS）程序同级存在 `portable` 标记文件 | 可执行文件 / `.AppImage` 同级目录（便携模式） | Windows 便携 `.zip` 默认携带该空文件 |
+| **打包版默认（标准两目录模式）** | `path.join(app.getPath('appData'), 'pi-workbench')` | Windows `%APPDATA%\pi-workbench` · macOS `~/Library/Application Support/pi-workbench` · Linux `~/.config/pi-workbench` |
 
-macOS 例外是经项目所有者确认的：`.app` 包内不可写、且自动更新会整体替换。
+**禁止**：在别处重新实现目录解析；把运行期数据散落到 `~/.pi`、`%LOCALAPPDATA%` 或 `node_modules`、`dist*`、`release`（全机严格保持「程序目录 + 唯一数据目录」两处，便携版为单目录）。
 
-**禁止**：在别处重新实现目录解析；用 `app.getPath('userData' | 'home' | 'documents' | 'appData')` 当数据目录（macOS 例外除外）；把运行时数据写进 `node_modules`、`dist*`、`release`。
-
-启动时 `main.ts` 的 `initAppDirectories()` 创建并维护四个目录：
+启动时 `main.ts` 的 `initAppDirectories()` 在 `getAppDir()` 内创建并维护四个子目录：
 
 ```
-{appDir}/config/   settings.json、providers.json、credentials.json、web-search.json、device-id、last-run-version.json、migrations.json
-{appDir}/cache/    drafts/（崩溃恢复草稿）、temp/（含 Web dev 模式的 web-agent/，可随时删）、{updaterCacheDirName}/（Linux 更新包）
-{appDir}/data/     agent/（模型与会话）、profile/（Chromium userData）、workspaces.db
-{appDir}/logs/     main.log、renderer.log、agent.log
+{dataDir}/config/   settings.json、providers.json、credentials.json、web-search.json、device-id、last-run-version.json、migrations.json
+{dataDir}/cache/    drafts/（崩溃恢复草稿）、temp/（含 Web dev 模式的 web-agent/，可随时删）、pi-workbench-updater/（差分更新缓存）
+{dataDir}/data/     agent/（模型与会话）、profile/（Chromium userData）、workspaces.db、cloud/
+{dataDir}/logs/     main.log、renderer.log、agent.log
 ```
 
 ## 2. 启动期顺序约束（改了会静默出错）
 
-1. `app.setPath('userData', '{appDir}/data/profile')` **必须早于** `app.requestSingleInstanceLock()`。
-   否则单实例锁先在默认 userData（`%APPDATA%\pi-workbench`）建目录与锁文件，违反便携式约束。
-2. `PI_CODING_AGENT_DIR` / `PI_CODING_AGENT_SESSION_DIR` **必须在任何 Pi SDK 模块加载之前**赋值。
+1. **旧版（≤0.11.2）升级迁移必须最早同步执行**：`migrateLegacyInstallDirSync()` 必须在建立 `FileLogger`、`app.setPath('userData')` 与打开 `workspaces.db` 之前运行，把旧安装目录内的 `config/ data/ logs/ cache/drafts/` 合并复制到标准数据目录（不覆盖目标已有文件），完成后写 `config/.migrated-from-install-dir` 并尽力归档旧目录到 `.legacy-data-backup/`。
+2. `app.setPath('userData', '{dataDir}/data/profile')` **必须早于** `app.requestSingleInstanceLock()`。
+   否则单实例锁会直接在 `<appData>/pi-workbench` 根目录建 Chromium 锁文件，与 `data/profile/` 分叉。
+3. `PI_CODING_AGENT_DIR` / `PI_CODING_AGENT_SESSION_DIR` **必须在任何 Pi SDK 模块加载之前**赋值。
    赋值发生在 `electron/app-paths.ts` 的模块顶层，而 `main.ts` 的第一条 import 就是它 —— 这条依赖顺序不能拆。
    默认值是 `~/.pi/agent`，一旦漏设，崩溃日志、扩展加载器、认证存储都会落到用户主目录。
-3. `electron/legacy-paths.ts` 只在打包版执行启动回收：`~/.pi` 合并进 `{appDir}/data/agent` 后删除（检测到独立 Pi CLI 时保留）；删除旧默认 userData 与安装器在 `%LOCALAPPDATA%` 的差分副本。
-4. 安装目录必须可写：安装器在目录页拒绝 `%ProgramFiles%`、`%ProgramFiles(x86)%`、`%SystemRoot%` 及其子目录，且 `allowElevation: false`。
+4. `electron/legacy-paths.ts` 只在打包版执行启动回收：`~/.pi` 合并进 `{dataDir}/data/agent` 后删除（检测到独立 Pi CLI 时保留）；清理旧版留在 `%LOCALAPPDATA%\Pi-Workbench-Update` 与 `%LOCALAPPDATA%\pi-workbench-updater` 的多余目录；**绝不删除 `<appData>/pi-workbench`**。
 5. 文件日志（`FileLogger`）**必须早于** `requestSingleInstanceLock()` 建立：锁被拒绝时要在 `logs/main.log` 留下
    `[Boot] Another instance holds the single instance lock`，否则「已有实例没退干净」在用户侧只表现为「双击没反应」，
    且事后没有任何现场证据。
-6. 新增任何运行时数据目录 → 必须加进 `scripts/lib/installer-manifest.js` 的 `PROTECTED_TOP_LEVEL`，否则更新时会被当程序文件删除（NSIS 侧读生成的清单，不要改卸载分支）。
+6. 数据目录不可写时由 `ensureAppDirWritable()` 给出清晰提示；设置页「关于」提供 `app:openDataDir` 一键打开数据目录。
 
 ## 2.1 退出顺序（改了会留下僵尸进程）
 
@@ -122,6 +120,6 @@ macOS 例外是经项目所有者确认的：`.app` 包内不可写、且自动�
 
 ## 5. 禁止清单
 
-- ❌ 在 `~/.pi`、`%APPDATA%`、`%LOCALAPPDATA%`、`~/Documents` 保存应用数据（唯一例外：Windows 更新包缓存在 `%LOCALAPPDATA%\Pi-Workbench-Update`，理由见 [BUILD_AND_PACKAGE §4.1](../guides/BUILD_AND_PACKAGE.md)）。
-- ❌ 用 `.env` 文件（位置不明确，违反便携式约束）。
+- ❌ 在 `~/.pi`、`%LOCALAPPDATA%`、`~/Documents` 散落额外应用目录（所有运行期文件包括更新缓存均收口在 `getAppDir()` 唯一数据目录内）。
+- ❌ 用 `.env` 文件（位置不明确）。
 - ❌ 让渲染进程通过 `workspace:init` 自行注册任意目录：工作区根目录只能由主进程批准（原生选择器的结果，或从 `workspaces.db` 载入的最近工作区）。

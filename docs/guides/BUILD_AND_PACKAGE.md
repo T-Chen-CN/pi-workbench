@@ -4,7 +4,7 @@
 > **什么时候读**：跑 `npm run package:*`、动 NSIS / 更新机制 / 数据目录之前
 > **什么时候要改**：构建脚本、打包配置、更新机制或受保护目录清单变化时
 
-**最后更新**: 2026-10-28
+**最后更新**: 2026-11-27
 
 ---
 
@@ -82,17 +82,19 @@ npm run build:bridge
 ## 4. 打包
 
 ```bash
-npm run package          # 当前平台
-npm run package:win      # Windows：NSIS 安装包
-npm run package:mac      # macOS (DMG)
-npm run package:linux    # Linux (AppImage)
+npm run package              # 当前平台
+npm run package:win          # Windows：NSIS 安装包（标准两目录）
+npm run package:win:portable # Windows：免安装便携版 .zip（单目录，自带 portable 标记）
+npm run package:mac          # macOS (DMG)
+npm run package:linux        # Linux (AppImage)
 ```
 
 输出目录：`release/`
 
 Windows 产物：
 
-- `Pi Workbench Setup <version>.exe` — NSIS 安装包（per-user、可选安装路径）
+- `Pi-Workbench-Setup-<version>.exe` — NSIS 安装包（per-user、可选安装路径、严格两目录）
+- `Pi-Workbench-Portable-<version>-win-x64.zip` — 免安装便携压缩包（解压即用、根级自带 `portable` 标记，由 `scripts/build-win-portable.mjs` 生成）
 
 **构建配置只有一处**：`package.json` → `build` 字段（`electron-builder.yml` 已移除，避免两份配置互相覆盖）。
 
@@ -166,30 +168,17 @@ npx asar list release/win-unpacked/resources/app.asar | grep pi-coding-agent | h
     `update-desktop-database` + `gtk-update-icon-cache`（目录存在时），Windows 再跑一次 `ie4uinit`；
   - 固定到任务栏 / 开始菜单的条目仍可能沿用 Explorer 会话里的缓存，需要重启资源管理器；Dock 图标
     必要时手动 `killall Dock`。这些属于用户侧操作，安装器与应用都不代劳。
-- **Windows 更新时的文件删除由自定义 NSIS 卸载器接管**（`build/installer.nsh` 的 `customRemoveFiles`）：
-  - 打包时 `scripts/after-pack-manifest.js`（`afterPack`）把安装器自己的文件写成清单，放在
-    `resources/installer-manifest.files.txt` / `installer-manifest.dirs.txt`（相对路径、CRLF）；
-  - 更新时只删除清单内的程序文件，`config/`、`data/`、`logs/`、`cache/` 原地保留（`cache/` 里还有
-    正在运行的更新安装包）；清单缺失时不删除任何文件；
-  - 真正卸载时，卸载欢迎页提供「保留配置与会话数据」勾选框（默认勾选，静默卸载同样保留）：
-    勾选时保留 `config/`、`data/`、`logs/`、`cache/`，只删程序文件与安装器生成的文件
-    （`Uninstall Pi Workbench.exe`、`uninstallerIcon.ico`、`resources/app-update.yml`、
-    `resources/elevate.exe`、`.write-probe`）；取消勾选才删除这四个目录。
-  - 受保护目录清单由 `afterPack` 生成为 `resources/installer-manifest.protected.txt`，
-    卸载器按文件删除；**新增运行时数据目录只需加入 `scripts/lib/installer-manifest.js` 的
-    `PROTECTED_TOP_LEVEL`**。写在安装目录其他位置的文件会被当作程序文件在更新时删除。
-  - 首个带该脚本的版本需要手动安装（旧版卸载器不受新脚本控制），此后自动更新才会保住数据。
+- **Windows 安装版与便携版的卸载/更新职责分离（[build/installer.nsh](../../build/installer.nsh)）**：
+  - 安装版程序文件与用户数据彻底解耦：更新与卸载直接走 `electron-builder` 标准 `$INSTDIR` 清理流程，不再维护 `afterPack` 清单脚本，也不存在更新误删用户数据的风险；
+  - 真正卸载（`${ifNot} ${isUpdated}`）时，卸载欢迎页提供「保留用户配置与会话数据（`%APPDATA%\pi-workbench`）」勾选框（默认勾选，静默卸载同样保留）；取消勾选时一并删除该数据目录；
+  - 便携版 `.zip` 内置空 `portable` 标记文件，`UpdateController` 自动禁用自动安装（`canAutoInstall = false`），检查到新版时引导用户前往 Release 页手动下载替换程序文件，绝不跑 NSIS 覆盖便携目录。
 - 产物文件名必须与更新清单一致：`win` / `mac` / `linux` 都配置了无空格的 `artifactName`。GitHub 会把资产名里的空格替换成点，若使用默认命名，`latest.yml` 中的连字符文件名会 404，自动更新直接失效。
-- 安装包缓存：Windows 使用 `%LOCALAPPDATA%\Pi-Workbench-Update`（安装目录之外）；Linux 使用 `{appDir}/cache/{updaterCacheDirName}`。Windows 的缓存必须在安装目录外——electron-builder 的卸载器按 `$INSTDIR` 路径前缀结束进程，安装器若从安装目录内启动会被误杀。
-- 外部缓存清理：安装器的 `customInstall` 写入 `%LOCALAPPDATA%\Pi-Workbench-Update.flag`，新版本启动时清理缓存中的下载残留并删除标记（带重试，保留差分基准）；真正卸载时一并删除。
-- 安装器副本清理：electron-builder 安装器会把自身复制到 `%LOCALAPPDATA%\pi-workbench-updater\installer.exe`；`customInstall` 在安装完成后删除该副本与目录，应用启动时兜底清理存量。
-- 差分更新：electron-updater 在 Windows 从 `{baseCachePath}/{updaterCacheDirName}/installer.exe` 读取旧安装包做块级差分。`customInstall` 把本次安装的安装包复制到 `%LOCALAPPDATA%\Pi-Workbench-Update\pi-workbench-updater\installer.exe`；启动清理与“无更新”清理只删除 `pending/` 等下载残留，保留该文件与 `current.blockmap`。每个安装常驻一份安装包大小的磁盘；基准过期或损坏时会被 sha512 校验拦下并自动回退全量下载。该机制从“由带复制步骤的安装器安装的版本”开始生效：从旧安装器升级的那一次仍是全量，之后的一次更新开始走差分。
-- 启动期回收：`electron/legacy-paths.ts` 会合并 `~/.pi` 到 `{appDir}/data/agent` 后删除（检测到独立 Pi CLI 时保留），并删除旧默认 userData（`%APPDATA%\pi-workbench` 等）。`app.setPath('userData')` 必须早于单实例锁，Pi SDK 目录通过环境变量固定到应用目录。
-- Windows 更新会设置 `installDirectory = appDir`，安装器始终带 `/D=`，不依赖注册表 `InstallLocation`。
-- 安装目录必须可写：安装器在目录页拒绝 `%ProgramFiles%`、`%ProgramFiles(x86)%`、`%SystemRoot%` 及子目录（`.onVerifyInstDir`），并设置 `allowElevation: false`，不会为装进受保护目录而提权。
+- **统一更新缓存与差分更新**：三平台标准模式统一使用 `{dataDir}/cache/pi-workbench-updater/`（Windows 为 `%APPDATA%\pi-workbench\cache\pi-workbench-updater\`，已在 `$INSTDIR` 之外，NSIS 卸载器不会误杀）。`customInstall` 写入差分基准 `installer.exe` 与 `pi-workbench-updater.flag` 标记，同时删掉 `electron-builder` 在 `%LOCALAPPDATA%\pi-workbench-updater` 生成的重复副本与旧版 `%LOCALAPPDATA%\Pi-Workbench-Update`，保证全机严格两目录；新版本首启按标记只清理 `pending/` 残留，保留差分基准与同级 `drafts/` / `temp/`。
+- 启动期迁移与回收：旧版（≤0.11.2）升级到标准两目录版时，`migrateLegacyInstallDirSync()` 在建日志/打开数据库前同步将旧安装目录内的 `config/ data/ logs/ cache/drafts/` 迁入 `%APPDATA%\pi-workbench`；`electron/legacy-paths.ts` 继续合并 `~/.pi` 到 `{dataDir}/data/agent`（检测到独立 Pi CLI 时保留）并清理旧 `%LOCALAPPDATA%` 残留。
+- Windows 安装版更新设置 `installDirectory = getInstallDir()`（程序安装目录而非数据目录），安装器始终带 `/D=`，不依赖注册表 `InstallLocation`。
 - 协议注册：`build.protocols` 在安装时注册 `pi-workbench://`，应用内 `setAsDefaultProtocolClient` 作为兜底。
-- CI 与打包冒烟使用 `--publish never`，不会误发布。
-- 本地验证打包：`npx electron-builder --win --dir --publish never`（macOS / Linux 需在对应系统上执行）。
+- CI 与打包冒烟使用 `--publish never`，不会误发布；`release.yml` 在 Windows 同时产出 Setup `.exe` 与 Portable `.zip`。
+- 本地验证打包：`npx electron-builder --win --dir --publish never`（再跑 `node scripts/build-win-portable.mjs` 验便携 zip）。
 - CI 的 `package-smoke` job 每次 push / PR 都会执行一次未压缩打包，防止打包配置回归。
 
 ---
@@ -197,28 +186,23 @@ npx asar list release/win-unpacked/resources/app.asar | grep pi-coding-agent | h
 ## 5. 质量检查
 
 ```bash
-npm run type-check   # TypeScript（严格模式）
+npm run type-check   # 全仓 7 份 tsconfig
 npm test             # Vitest 单元测试
-npm run lint         # ESLint（含 react-hooks 规则）
+npm run lint         # ESLint（含 jsx-a11y、跨包边界、AST 色值护栏）
 npm run format       # Prettier（会重排源码，按需执行）
 ```
 
-CI（`.github/workflows/ci.yml`）在 push / PR 时执行：`npm ci` → type-check → test → lint → build。
+CI（`.github/workflows/ci.yml`）在 push / PR 时执行：`npm ci` → `build:bridge` → `type-check` → `build:cloud` → `test` → `lint` → `build`。
 
 ---
 
-## 6. 便携式数据目录
+## 6. 数据目录模型（严格两目录 + 可选便携版）
 
-Windows / Linux（AppImage 放在 `.AppImage` 文件旁边）在可执行文件所在目录创建并维护 `config/`、`cache/`、`data/`、`logs/`；具体文件与写入者见 [agent/paths-and-storage §3](../agent/paths-and-storage.md)。
-
-Windows 安装目录必须可写：如果安装到 `C:\Program Files` 等位置，启动时会弹窗提示重新安装到用户可写目录。
-
-**macOS 例外**：应用包内不可写且会被更新替换，打包版数据目录为
-`~/Library/Application Support/pi-workbench`（同上结构）。这是经项目所有者确认的便携式例外。
-
-工作区级数据：`{workspace}/.pi-workbench/`
-
-卸载 / 迁移时整体拷贝应用目录即可（macOS 为上述 Application Support 目录）。
+- **安装版（默认，三平台一致）**：
+  - 程序目录：安装位置（仅放程序文件，更新整包替换）；
+  - 唯一数据目录：Windows `%APPDATA%\pi-workbench` · macOS `~/Library/Application Support/pi-workbench` · Linux `~/.config/pi-workbench`，集中维护 `config/`、`cache/`、`data/`、`logs/`（具体文件清单见 [agent/paths-and-storage §3](../agent/paths-and-storage.md)）。应用内「设置 → 关于」提供「打开数据目录」按钮一键直达。
+- **便携版（Windows `.zip` 或同级放 `portable` 标记）**：程序与 `config/`、`cache/`、`data/`、`logs/` 同处一个目录，适合免安装绿色使用（注：本机密钥仍绑定当前 OS 用户）。
+- 工作区级配置：`{workspace}/.pi-workbench/`（随项目存放，仅存轻量工作区配置与索引）。
 
 ---
 

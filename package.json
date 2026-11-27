@@ -39,6 +39,7 @@
     "type-check": "tsc --noEmit && tsc -p tsconfig.node.json --noEmit && tsc -p electron/tsconfig.json --noEmit && tsc -p electron/tsconfig.preload.json --noEmit && npm run type-check --workspace pi-bridge && npm run type-check --workspace @pi-workbench/cloud && npm run type-check --workspace @pi-workbench/cloud-ui",
     "package": "npm run build && electron-builder",
     "package:win": "npm run build && electron-builder --win",
+    "package:win:portable": "npm run build && electron-builder --win --dir --publish never && node scripts/build-win-portable.mjs",
     "package:mac": "npm run build && electron-builder --mac",
     "package:linux": "npm run build && electron-builder --linux",
     "test": "vitest run",
@@ -130,7 +131,6 @@
     "directories": {
       "output": "release"
     },
-    "afterPack": "./scripts/after-pack-manifest.js",
     "asarUnpack": [
       "node_modules/node-pty/**"
     ],

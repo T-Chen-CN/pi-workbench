@@ -1,13 +1,12 @@
 /**
- * 旧版本遗留在系统目录中的应用数据：一次性回收与清理。
+ * 旧版本数据迁移与残留目录清理：
  *
- * - `~/.pi`：Pi SDK 的全局 agent 目录（默认 getAgentDir()）。应用主流程已显式
- *   传入 agentDir，但 SDK 的若干默认入口仍会落在这里；把内容合并进
- *   `{appDir}/data/agent` 后删除。
- * - `%APPDATA%\pi-workbench`：旧版 Electron 默认 userData（单实例锁在 setPath
- *   之前创建）。当前版本已改为应用目录，这里只负责清理存量。
- * - `%LOCALAPPDATA%\pi-workbench-updater`：electron-builder 安装器的差分副本，
- *   我们的更新缓存在别处，这份副本不会被读取。
+ * - 旧便携安装目录迁移（0.11.x → 标准两目录模型）：首次升级启动时把旧安装目录的
+ *   `config/`、`data/`、`logs/`、`cache/drafts/` 合并复制到 `<appData>/pi-workbench`
+ *   （不覆盖目标已有文件），完成后写标记并尽力归档旧目录。
+ * - `~/.pi`：Pi SDK 默认 agent 目录，合并进 `{dataDir}/data/agent` 后删除（检测到独立 Pi CLI 时保留）。
+ * - `%LOCALAPPDATA%\Pi-Workbench-Update` / `%LOCALAPPDATA%\pi-workbench-updater`：
+ *   旧版外部更新缓存与 electron-builder 差分副本，统一迁回 `{dataDir}/cache` 后清理。
  */
 import * as fs from 'node:fs'
 import * as path from 'node:path'
@@ -16,6 +15,168 @@ export interface LegacyLogger {
   info: (...args: unknown[]) => void
   warn: (...args: unknown[]) => void
   error: (...args: unknown[]) => void
+}
+
+export interface LegacyInstallMigrationOptions {
+  installDir: string
+  dataDir: string
+  logger?: LegacyLogger
+}
+
+export interface LegacyInstallMigrationResult {
+  needed: boolean
+  migratedFiles: number
+  skippedFiles: number
+  archivedLegacy: boolean
+  reason?: string
+}
+
+const INSTALL_MIGRATION_MARKER = path.join('config', '.migrated-from-install-dir')
+const CHROMIUM_LOCK_FILES = new Set([
+  'SingletonLock',
+  'SingletonSocket',
+  'SingletonCookie',
+  'lockfile',
+])
+
+/**
+ * 同步迁移旧版本（<=0.11.2）留在程序安装目录内的用户数据到标准数据目录。
+ * 必须在主进程建立日志、setPath('userData')、打开 workspaces.db 之前调用，
+ * 否则新目录会先建出空库和默认配置。
+ */
+export function migrateLegacyInstallDirSync(
+  options: LegacyInstallMigrationOptions
+): LegacyInstallMigrationResult {
+  const logger = options.logger ?? console
+  const installDir = path.resolve(options.installDir)
+  const dataDir = path.resolve(options.dataDir)
+  const result: LegacyInstallMigrationResult = {
+    needed: false,
+    migratedFiles: 0,
+    skippedFiles: 0,
+    archivedLegacy: false,
+  }
+
+  if (installDir === dataDir) {
+    result.reason = 'same-directory'
+    return result
+  }
+
+  const markerPath = path.join(dataDir, INSTALL_MIGRATION_MARKER)
+  if (fs.existsSync(markerPath)) {
+    result.reason = 'already-migrated'
+    return result
+  }
+
+  const hasLegacyConfig = isDirectorySync(path.join(installDir, 'config'))
+  const hasLegacyData = isDirectorySync(path.join(installDir, 'data'))
+  if (!hasLegacyConfig && !hasLegacyData) {
+    result.reason = 'no-legacy-data'
+    return result
+  }
+
+  result.needed = true
+  let hadError = false
+
+  const copyTreeNoOverwrite = (sourceRoot: string, targetRoot: string): void => {
+    if (!isDirectorySync(sourceRoot)) return
+    fs.mkdirSync(targetRoot, { recursive: true })
+    for (const dirent of fs.readdirSync(sourceRoot, { withFileTypes: true })) {
+      if (CHROMIUM_LOCK_FILES.has(dirent.name)) continue
+      const source = path.join(sourceRoot, dirent.name)
+      const target = path.join(targetRoot, dirent.name)
+      try {
+        if (dirent.isSymbolicLink()) continue
+        if (dirent.isDirectory()) {
+          copyTreeNoOverwrite(source, target)
+          continue
+        }
+        if (fs.existsSync(target)) {
+          result.skippedFiles += 1
+          continue
+        }
+        fs.mkdirSync(path.dirname(target), { recursive: true })
+        fs.copyFileSync(source, target)
+        result.migratedFiles += 1
+      } catch (error) {
+        hadError = true
+        logger.warn('[Legacy] Failed to copy legacy install-dir file:', source, error)
+      }
+    }
+  }
+
+  const subtrees = ['config', 'data', 'logs', path.join('cache', 'drafts')]
+  for (const subtree of subtrees) {
+    try {
+      copyTreeNoOverwrite(path.join(installDir, subtree), path.join(dataDir, subtree))
+    } catch (error) {
+      hadError = true
+      logger.warn('[Legacy] Failed to scan legacy install-dir subtree:', subtree, error)
+    }
+  }
+
+  if (hadError) {
+    result.reason = 'incomplete'
+    return result
+  }
+
+  try {
+    fs.mkdirSync(path.dirname(markerPath), { recursive: true })
+    fs.writeFileSync(
+      markerPath,
+      JSON.stringify(
+        {
+          from: installDir,
+          migratedAt: new Date().toISOString(),
+          migratedFiles: result.migratedFiles,
+          skippedFiles: result.skippedFiles,
+        },
+        null,
+        2
+      ),
+      'utf-8'
+    )
+  } catch (error) {
+    logger.warn('[Legacy] Failed to write install-dir migration marker:', error)
+    result.reason = 'marker-write-failed'
+    return result
+  }
+
+  // 尽力把旧安装目录内的数据目录归档到 .legacy-data-backup，便于用户回退或后续卸载清理；
+  // 若安装目录只读则静默跳过，绝不影响启动。
+  const backupRoot = path.join(installDir, '.legacy-data-backup')
+  let archivedAny = false
+  for (const top of ['config', 'data', 'logs', 'cache']) {
+    const source = path.join(installDir, top)
+    if (!isDirectorySync(source)) continue
+    try {
+      fs.mkdirSync(backupRoot, { recursive: true })
+      const dest = path.join(backupRoot, top)
+      if (!fs.existsSync(dest)) {
+        fs.renameSync(source, dest)
+        archivedAny = true
+      }
+    } catch (error) {
+      logger.warn('[Legacy] Could not archive legacy install-dir folder (leaving in place):', source, error)
+    }
+  }
+  result.archivedLegacy = archivedAny
+  logger.info('[Legacy] Migrated legacy install-dir data to standard data directory:', {
+    from: installDir,
+    to: dataDir,
+    migratedFiles: result.migratedFiles,
+    skippedFiles: result.skippedFiles,
+    archivedLegacy: result.archivedLegacy,
+  })
+  return result
+}
+
+function isDirectorySync(target: string): boolean {
+  try {
+    return fs.statSync(target).isDirectory()
+  } catch {
+    return false
+  }
 }
 
 export interface PiAgentHomeMigrationOptions {
@@ -212,8 +373,8 @@ async function removeWithRetry(
 }
 
 /**
- * 清理旧版本在系统目录留下的应用目录。
- * 永远不删除应用目录内的路径，也不会删除当前 userData。
+ * 清理旧版本在系统目录留下的多余更新缓存目录（保证全机严格两目录）。
+ * 绝不删除 `<appData>/pi-workbench`、当前 userData 或数据目录内的路径。
  */
 export async function cleanupLegacySystemPaths(
   options: LegacySystemCleanupOptions
@@ -223,13 +384,11 @@ export async function cleanupLegacySystemPaths(
   const delayMs = Math.max(0, options.delayMs ?? 300)
   const targets: string[] = []
 
-  // macOS 的 <appData>/pi-workbench 是当前数据目录，不能删
-  if (options.platform !== 'darwin') {
-    targets.push(path.join(options.appDataPath, 'pi-workbench'))
-  }
   if (options.platform === 'win32') {
     const local = options.localAppDataPath ?? options.appDataPath
     targets.push(path.join(local, 'pi-workbench-updater'))
+    targets.push(path.join(local, 'Pi-Workbench-Update'))
+    targets.push(path.join(local, 'Pi-Workbench-Update.flag'))
   } else {
     targets.push(path.join(options.cachePath, 'pi-workbench-updater'))
   }

@@ -12,7 +12,7 @@ import {
   terminalResizeSchema,
   terminalWriteSchema,
 } from './schemas.js'
-import { getAppDir } from '../app-paths.js'
+import { getAppDir, getInstallDir, isPortableMode } from '../app-paths.js'
 import { isExternalUrl } from '../external-links.js'
 import { isTrustedWorkspacePath, canonicalizePath, isPathInsideRoot } from '../workspace-trust.js'
 import type { TerminalManager } from '../terminal-manager.js'
@@ -202,6 +202,8 @@ export function registerSystemIpc(context: SystemIpcContext): void {
       const { UpdateController: Controller } = await import('../updater.js')
       updateController = new Controller({
         appDir: getAppDir(),
+        installDir: getInstallDir(),
+        portable: isPortableMode(),
         emit: sendUpdateState,
         currentVersion: app.getVersion(),
         platform: process.platform,
@@ -272,6 +274,7 @@ export function registerSystemIpc(context: SystemIpcContext): void {
       platform: process.platform,
       arch: process.arch,
       appDir: getAppDir(),
+      portable: isPortableMode(),
     },
   }))
 
@@ -358,6 +361,17 @@ export function registerSystemIpc(context: SystemIpcContext): void {
   handleIpc('app:getAppDir', async () => {
     try {
       return { success: true, appDir: getAppDir() }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  handleIpc('app:openDataDir', async () => {
+    try {
+      const target = getAppDir()
+      const errMsg = await shell.openPath(target)
+      if (errMsg) return { success: false, error: errMsg }
+      return { success: true }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }

@@ -153,6 +153,10 @@ const mockAPI = {
     console.log('[Mock] getAppDir')
     return { success: true, appDir: '/mock/app/dir' }
   },
+  openDataDir: async (): Promise<{ success: boolean; error?: string }> => {
+    console.log('[Mock] openDataDir')
+    return { success: true }
+  },
   logRenderer: async () => ({ success: true }),
   updateCheck: async (): Promise<UpdateCheckResult> => ({
     success: false,
@@ -724,8 +728,12 @@ export const api = {
       ? electronAPI.documentRenderResult(payload)
       : Promise.resolve({ success: false }),
 
-  // App configuration (portable architecture)
+  // App configuration & data directory
   getAppDir: () => electronAPI.getAppDir(),
+  openDataDir: () =>
+    typeof electronAPI.openDataDir === 'function'
+      ? electronAPI.openDataDir()
+      : Promise.resolve({ success: false, error: 'Unsupported' }),
   logRenderer: (level: string, args: unknown[]) => electronAPI.logRenderer(level, args),
   updateCheck: () => electronAPI.updateCheck(),
   updateDownload: () => electronAPI.updateDownload(),

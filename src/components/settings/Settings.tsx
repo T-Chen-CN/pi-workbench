@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import {
   ExternalLink,
+  FolderOpen,
   GitPullRequest,
   Globe,
   Info,
@@ -661,9 +662,31 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
               <dt className="text-ink-muted">{t('aboutFramework')}</dt>
               <dd className="m-0 text-ink">{t('infoFramework')}</dd>
               <dt className="text-ink-muted">{t('aboutArchitecture')}</dt>
-              <dd className="m-0 text-ink">{t('infoArchitecture')}</dd>
+              <dd className="m-0 text-ink">
+                {appInfo?.portable ? t('infoArchitecture') : t('infoArchitectureStandard')}
+              </dd>
               <dt className="text-ink-muted">{t('aboutApiSupport')}</dt>
               <dd className="m-0 text-ink">{t('infoApiSupport')}</dd>
+              <dt className="text-ink-muted">{t('aboutDataDir')}</dt>
+              <dd className="m-0 flex flex-col items-start gap-2">
+                <span className="type-data break-all text-ink">{appInfo?.appDir ?? '—'}</span>
+                <Button
+                  size="sm"
+                  icon={FolderOpen}
+                  onClick={async () => {
+                    const result = await api.openDataDir()
+                    if (!result.success) {
+                      toast.error(
+                        t('openDataDirFailed', {
+                          error: localizeError(result.error || 'Failed to open data folder'),
+                        })
+                      )
+                    }
+                  }}
+                >
+                  {t('openDataDir')}
+                </Button>
+              </dd>
             </dl>
 
             <div className="mt-4 border-t border-rule-divide pt-4">
@@ -741,7 +764,9 @@ export const Settings: React.FC<SettingsProps> = ({ initialSection = 'general' }
               )}
 
               {update.status === 'available' && !update.canAutoInstall && (
-                <p className="m-0 mt-2 type-caption text-ink-muted">{t('updateMacManualHint')}</p>
+                <p className="m-0 mt-2 type-caption text-ink-muted">
+                  {appInfo?.portable ? t('updatePortableManualHint') : t('updateMacManualHint')}
+                </p>
               )}
 
               {update.releaseNotes &&

@@ -1,25 +1,112 @@
-/** 便携式应用目录解析 */
+/**
+ * 应用目录解析（严格两目录模型 + 可选便携模式）。
+ *
+ * - 开发模式：仓库根目录
+ * - 打包版默认（标准模式）：
+ *   - 程序目录 `getInstallDir()`：可执行文件所在目录（仅程序文件，更新时整包替换）
+ *   - 唯一数据目录 `getAppDir()`：各系统标准用户数据目录 `<appData>/pi-workbench`
+ *     （Windows `%APPDATA%\pi-workbench`、macOS `~/Library/Application Support/pi-workbench`、
+ *      Linux `~/.config/pi-workbench`）
+ * - 打包版便携模式（由免安装便携包在程序目录放置空 `portable` 标记文件，或显式传 `--data-dir`）：
+ *   - 数据与程序同处 `getInstallDir()`（或 `--data-dir` 指定路径）
+ */
 
 import { app } from 'electron'
+import * as fs from 'node:fs'
 import * as path from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
 
+/** 便携版标记文件名（放在可执行文件 / AppImage 同级目录即启用单目录便携模式） */
+export const PORTABLE_MARKER_FILE = 'portable'
+
+/** 系统用户数据目录下的唯一应用文件夹名 */
+export const APP_DATA_DIR_NAME = 'pi-workbench'
+
+export interface ResolveAppPathsOptions {
+  isPackaged?: boolean
+  platform?: NodeJS.Platform
+  appPath?: string
+  exePath?: string
+  appDataPath?: string
+  appImagePath?: string
+  argv?: string[]
+  existsSync?: (target: string) => boolean
+}
+
+export interface ResolvedAppPaths {
+  dataDir: string
+  installDir: string
+  portable: boolean
+}
+
+function readDataDirArg(argv: string[]): string | null {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index]
+    if (arg.startsWith('--data-dir=')) {
+      const value = arg.slice('--data-dir='.length).trim()
+      if (value) return value
+    } else if (arg === '--data-dir') {
+      const next = argv[index + 1]?.trim()
+      if (next && !next.startsWith('-')) return next
+    }
+  }
+  return null
+}
+
+/**
+ * 纯函数路径解析，便于单测验证三平台与便携开关组合。
+ * 生产调用省略参数时从 Electron `app` 与 `process` 读取真实环境。
+ */
+export function resolveAppPaths(options?: ResolveAppPathsOptions): ResolvedAppPaths {
+  const isPackaged = options?.isPackaged ?? app.isPackaged
+  const platform = options?.platform ?? process.platform
+  const appImagePath = options?.appImagePath ?? process.env.APPIMAGE
+  const argv = options?.argv ?? process.argv
+  const checkExists = options?.existsSync ?? fs.existsSync
+
+  if (!isPackaged) {
+    const devDir = options?.appPath ?? app.getAppPath()
+    return { dataDir: devDir, installDir: devDir, portable: false }
+  }
+
+  const installDir = appImagePath
+    ? path.dirname(appImagePath)
+    : path.dirname(options?.exePath ?? app.getPath('exe'))
+
+  const cliDataDir = readDataDirArg(argv)
+  if (cliDataDir) {
+    return { dataDir: path.resolve(cliDataDir), installDir, portable: true }
+  }
+
+  // macOS .app 包内只读且会被更新整体替换，仅非 macOS 识别同级 portable 标记
+  if (platform !== 'darwin' && installDir) {
+    try {
+      if (checkExists(path.join(installDir, PORTABLE_MARKER_FILE))) {
+        return { dataDir: installDir, installDir, portable: true }
+      }
+    } catch {
+      // 无法探测标记时回退标准模式
+    }
+  }
+
+  const appDataPath = options?.appDataPath ?? app.getPath('appData')
+  const dataDir = path.join(appDataPath, APP_DATA_DIR_NAME)
+  return { dataDir, installDir, portable: false }
+}
+
+/** 返回应用唯一数据目录（config / data / cache / logs 的共同根） */
 export function getAppDir(): string {
-  // AppImage：可执行文件位于只读挂载点，数据放在 .AppImage 文件旁边
-  if (process.env.APPIMAGE) {
-    return path.dirname(process.env.APPIMAGE)
-  }
-  if (!app.isPackaged) {
-    // 开发模式：项目根目录（比 process.cwd() 更稳定，不依赖启动目录）
-    return app.getAppPath()
-  }
-  if (process.platform === 'darwin') {
-    // macOS 应用包内不可写，且会被更新整体替换。
-    // 经项目所有者确认，macOS 使用系统标准数据目录作为便携式约束的例外。
-    return path.join(app.getPath('appData'), 'pi-workbench')
-  }
-  // 生产模式：可执行文件所在目录
-  return path.dirname(app.getPath('exe'))
+  return resolveAppPaths().dataDir
+}
+
+/** 返回程序安装目录（只读程序文件所在目录） */
+export function getInstallDir(): string {
+  return resolveAppPaths().installDir
+}
+
+/** 当前是否以单目录便携模式运行（Windows 便携 zip 或 --data-dir） */
+export function isPortableMode(): boolean {
+  return resolveAppPaths().portable
 }
 
 /**
@@ -36,7 +123,7 @@ export function getBridgeEntryUrl(): string {
  * Pi SDK 的全局 agent 目录。
  *
  * SDK 的 getAgentDir() 默认是 `~/.pi/agent`；必须在任何 SDK 模块加载之前通过
- * 环境变量固定到应用目录，否则崩溃日志、扩展加载器、认证存储等默认入口会在
+ * 环境变量固定到应用数据目录，否则崩溃日志、扩展加载器、认证存储等默认入口会在
  * 用户主目录下创建文件。本模块是主进程最先加载的模块之一，赋值在这里生效。
  */
 export const piAgentDir = path.join(getAppDir(), 'data', 'agent')

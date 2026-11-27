@@ -88,8 +88,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 渲染进程日志（写入 {appDir}/logs/renderer.log）
   logRenderer: (level: string, args: unknown[]) => ipcRenderer.invoke('log:renderer', level, args),
 
-  // 应用配置管理（便携式架构）
+  // 应用配置管理（两目录模型 / 可选便携模式）
   getAppDir: () => ipcRenderer.invoke('app:getAppDir'),
+  openDataDir: () => ipcRenderer.invoke('app:openDataDir'),
   getSettings: () => ipcRenderer.invoke('app:getSettings'),
   saveSettings: (settings: any) => ipcRenderer.invoke('app:saveSettings', settings),
   getRecentWorkspaces: () => ipcRenderer.invoke('app:getRecentWorkspaces'),

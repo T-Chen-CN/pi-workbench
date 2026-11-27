@@ -664,6 +664,9 @@ const zh = {
     shortcutCloseOverlay: '关闭设置 / 命令面板 / Diff',
     aboutFramework: '框架',
     aboutArchitecture: '架构',
+    aboutDataDir: '数据目录',
+    openDataDir: '打开数据目录',
+    openDataDirFailed: '打开数据目录失败：{error}',
     aboutApiSupport: 'API 支持',
     aboutRuntime: '运行时',
     aboutVersion: '版本 {version}',
@@ -690,6 +693,8 @@ const zh = {
     updateOpenDownload: '前往下载',
     updateUnsupported: '仅打包版本支持自动更新',
     updateMacManualHint: 'macOS 未签名，需要手动下载安装包并拖入 Applications 覆盖安装。',
+    updatePortableManualHint:
+      '便携版不支持自动覆盖安装；请前往发布页下载新版便携压缩包，保留 config/data/logs 后替换程序文件。',
     updateNotes: '更新说明',
     updateBusyConfirm: 'Agent 正在输出或终端仍在运行，重启会中断这些任务。仍要重启安装吗？',
     // 云端 Agent（独立页面，与工作区无关）
@@ -902,6 +907,7 @@ const zh = {
     saving: '保存中...',
     infoFramework: 'Electron 44 + React 19',
     infoArchitecture: '便携式（自包含）',
+    infoArchitectureStandard: '本地优先（程序与数据分离）',
     infoApiSupport: '兼容 OpenAI 协议',
     dialogGotIt: '知道了',
 
@@ -1659,6 +1665,9 @@ const en: Record<TranslationKey, string> = {
     shortcutCloseOverlay: 'Close settings / palette / diff',
     aboutFramework: 'Framework',
     aboutArchitecture: 'Architecture',
+    aboutDataDir: 'Data folder',
+    openDataDir: 'Open data folder',
+    openDataDirFailed: 'Failed to open data folder: {error}',
     aboutApiSupport: 'API support',
     aboutRuntime: 'Runtime',
     aboutVersion: 'Version {version}',
@@ -1686,6 +1695,8 @@ const en: Record<TranslationKey, string> = {
     updateUnsupported: 'Updates are available in packaged builds only',
     updateMacManualHint:
       'macOS builds are unsigned; download the package and drag it into Applications to replace the old version.',
+    updatePortableManualHint:
+      'Portable builds update manually: download the new portable archive from Releases and replace the app files while keeping config/data/logs.',
     updateNotes: 'Release notes',
     updateBusyConfirm:
       'The agent is responding or a terminal is still active. Restarting will interrupt them. Restart and install anyway?',
@@ -1911,6 +1922,7 @@ const en: Record<TranslationKey, string> = {
     saving: 'Saving...',
     infoFramework: 'Electron 44 + React 19',
     infoArchitecture: 'Portable (self-contained)',
+    infoArchitectureStandard: 'Local-first (separate app & data)',
     infoApiSupport: 'OpenAI-compatible',
     dialogGotIt: 'Got it',
 

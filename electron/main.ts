@@ -1,4 +1,5 @@
-import { getAppDir, piAgentDir } from './app-paths.js'
+import { getAppDir, getInstallDir, isPortableMode, piAgentDir } from './app-paths.js'
+import { migrateLegacyInstallDirSync } from './legacy-paths.js'
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, Notification, screen } from 'electron'
 import * as path from 'path'
 import * as fs from 'fs/promises'
@@ -81,6 +82,20 @@ import {
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
+// 旧版（<=0.11.2）升级到标准两目录模型时，必须在建日志、setPath('userData') 与打开 workspaces.db
+// 之前同步把旧安装目录中的用户数据迁入标准数据目录，避免新目录先生成空库和默认设置。
+if (app.isPackaged && !isPortableMode()) {
+  try {
+    migrateLegacyInstallDirSync({
+      installDir: getInstallDir(),
+      dataDir: getAppDir(),
+      logger: console,
+    })
+  } catch (error) {
+    console.error('[Main] Failed to migrate legacy install-dir data:', error)
+  }
+}
+
 // 文件日志必须在单实例锁判定之前建立：锁被拒绝时也要能在 main.log 里留下原因，
 // 否则用户看到的现象只是「双击没反应」，事后完全无从取证。
 let fileLogger: FileLogger | null = null
@@ -118,10 +133,6 @@ configureIpcWindow(() => mainWindow)
 /** 真正退出流程已开始：关闭按钮不再收进托盘，窗口正常销毁 */
 let quitting = false
 
-/**
- * 启动页：窗口先以 420×260 出现，面板数据就绪后放大到工作台尺寸。
- * 总视觉时长 = 停留（≥600ms）+ 放大（400ms），即最短 1 秒。
- */
 /** 启动期的目录迁移、SQLite 播种与联网配置；最近工作区 IPC 会等它完成 */
 let startupReady: Promise<void> = Promise.resolve()
 
@@ -641,14 +652,14 @@ function resolveSystemCachePath(): string {
 }
 
 /**
- * 安装目录不可写时给出明确提示。
- * 应用把 config / data / logs / 更新缓存都放在安装目录；装到 Program Files
- * 这类位置时写入会失败，用户会误以为设置没保存。
+ * 数据目录不可写时给出明确提示（标准模式为系统用户数据目录，便携模式为程序所在目录）。
  */
 async function ensureAppDirWritable(): Promise<void> {
-  const probePath = path.join(getAppDir(), '.write-probe')
+  const dataDir = getAppDir()
+  const probePath = path.join(dataDir, '.write-probe')
   let writable = true
   try {
+    await fs.mkdir(dataDir, { recursive: true })
     await fs.writeFile(probePath, 'ok', 'utf-8')
     await fs.unlink(probePath)
   } catch {
@@ -656,24 +667,29 @@ async function ensureAppDirWritable(): Promise<void> {
   }
   if (writable) return
 
-  console.error('[Main] App directory is not writable:', getAppDir())
+  console.error('[Main] Data directory is not writable:', dataDir)
   const zh = app.getLocale?.().toLowerCase().startsWith('zh') ?? true
+  const portable = isPortableMode()
   try {
     await dialog.showMessageBox({
       type: 'warning',
       buttons: [zh ? '知道了' : 'OK'],
       defaultId: 0,
       noLink: true,
-      title: zh ? '安装目录不可写' : 'Install folder is not writable',
+      title: zh ? '数据目录不可写' : 'Data folder is not writable',
       message: zh
-        ? '当前安装目录无法写入，设置、会话和更新都会保存失败。'
-        : 'The install folder is not writable; settings, sessions, and updates cannot be saved.',
-      detail: zh
-        ? `安装位置：${getAppDir()}\n请卸载后重新安装到用户可写目录（例如用户文件夹下的 Programs），或把应用移动到有写权限的位置。`
-        : `Location: ${getAppDir()}\nUninstall and reinstall into a folder your user can write to (for example Programs under your home folder), or move the app to a writable location.`
+        ? '当前数据目录无法写入，设置、会话和更新都会保存失败。'
+        : 'The data folder is not writable; settings, sessions, and updates cannot be saved.',
+      detail: portable
+        ? zh
+          ? `便携目录：${dataDir}\n请把便携版目录移动到当前用户有写权限的位置。`
+          : `Portable folder: ${dataDir}\nMove the portable folder to a location your user can write to.`
+        : zh
+          ? `数据目录：${dataDir}\n请检查当前用户对该目录的写入权限。`
+          : `Data folder: ${dataDir}\nCheck that your user account has write permissions for this folder.`
     })
   } catch (error) {
-    console.error('[Main] Failed to show install folder warning:', error)
+    console.error('[Main] Failed to show data folder warning:', error)
   }
 }
 

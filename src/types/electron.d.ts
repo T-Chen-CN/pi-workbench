@@ -246,8 +246,9 @@ export interface ElectronAPI {
   /** 渲染层回传 PNG 或错误 */
   documentRenderResult: (payload: DocumentRenderResultPayload) => Promise<{ success: boolean }>
 
-  // App configuration (portable architecture)
+  // App configuration & data directory
   getAppDir: () => Promise<GetAppDirResult>
+  openDataDir: () => Promise<{ success: boolean; error?: string }>
   logRenderer: (level: string, args: unknown[]) => Promise<{ success: boolean }>
   updateCheck: () => Promise<UpdateCheckResult>
   updateDownload: () => Promise<UpdateActionResult>
@@ -1773,6 +1774,7 @@ export interface AppInfo {
   platform: string
   arch: string
   appDir: string
+  portable?: boolean
 }
 
 export interface AppInfoResult {

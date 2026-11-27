@@ -2,17 +2,15 @@
  * 自动更新控制器。
  *
  * 只处理打包版本：
- * - Windows / Linux 使用 electron-updater：检查后自动下载，但绝不自动安装
- * - macOS 未签名，只能检查版本并引导用户前往 GitHub Release 手动下载
+ * - Windows 安装版 / Linux AppImage 使用 electron-updater：检查后自动下载，但绝不自动安装
+ * - macOS（未签名）与便携版（含 `portable` 标记）：仅检查 GitHub Release 并引导用户手动下载
  *
- * Windows 的安装包缓存放在 `%LOCALAPPDATA%\Pi-Workbench-Update`（安装目录之外）：
- * electron-builder 的卸载器会按 `$INSTDIR` 路径前缀结束进程，安装器若从安装目录内
- * 启动会被自己当成应用杀掉。安装完成后由安装器写入 `...Update.flag`，新版本启动时
- * 依据标记清空外部缓存。Linux / macOS 保持 `{appDir}/cache`。
+ * 三平台标准模式下，更新缓存统一落在 `{dataDir}/cache/pi-workbench-updater/`：
+ * 因为数据目录与程序安装目录分离，Windows NSIS 卸载器不会误杀从数据目录启动的安装器，
+ * 全机严格维持「程序目录 + 唯一数据目录」两处位置。
  */
 import { app, net, shell } from 'electron'
 import * as fs from 'fs'
-import * as os from 'os'
 import * as path from 'path'
 // electron-updater 是 CommonJS 模块：主进程以 ESM 运行，命名导入在 Node 的
 // CJS 互操作下不可靠，必须走默认导入再取属性。
@@ -120,7 +118,12 @@ interface UpdaterLike {
 }
 
 export interface UpdateControllerOptions {
+  /** 唯一数据目录（用于存放更新缓存 `{appDir}/cache/pi-workbench-updater`） */
   appDir: string
+  /** 程序安装目录（Windows 固定 NSIS `/D=`；默认回退 appDir） */
+  installDir?: string
+  /** 是否为单目录便携版（便携版仅检查更新并引导下载，不自动运行 NSIS 安装器） */
+  portable?: boolean
   emit: (state: UpdateState) => void
   currentVersion?: string
   platform?: NodeJS.Platform
@@ -131,8 +134,6 @@ export interface UpdateControllerOptions {
   publishTarget?: PublishTarget
   fetchRelease?: () => Promise<GithubRelease>
   createUpdater?: () => UpdaterLike
-  /** 测试用：覆盖 %LOCALAPPDATA% */
-  localAppData?: string
 }
 
 export const UPDATE_ERROR = {
@@ -150,32 +151,21 @@ const DEFAULT_PUBLISH_TARGET: PublishTarget = {
   updaterCacheDirName: 'pi-workbench-updater',
 }
 
-/** Windows 外部更新缓存目录名（位于 %LOCALAPPDATA% 下） */
-export const EXTERNAL_UPDATE_CACHE_DIR = 'Pi-Workbench-Update'
-
 /**
- * electron-updater 的缓存基目录。
- * Windows 必须在安装目录之外：electron-builder 的卸载器按 `$INSTDIR` 路径前缀
- * 结束进程，安装器若从安装目录内启动会被误杀。
+ * electron-updater 的缓存基目录：三平台统一收口到 `{dataDir}/cache`
+ * （其下由 electron-updater 建 `pi-workbench-updater/` 子目录），不再在 `%LOCALAPPDATA%` 额外建第 3 个目录。
  */
 export function resolveUpdaterCacheBase(options: {
   appDir: string
   platform: NodeJS.Platform
-  localAppData?: string
 }): string {
-  if (options.platform !== 'win32') return path.join(options.appDir, 'cache')
-  const base =
-    options.localAppData ??
-    process.env.LOCALAPPDATA ??
-    path.join(os.homedir(), 'AppData', 'Local')
-  return path.join(base, EXTERNAL_UPDATE_CACHE_DIR)
+  return path.join(options.appDir, 'cache')
 }
 
 export interface UpdateCacheCleanupOptions {
   appDir: string
   platform: NodeJS.Platform
-  localAppData?: string
-  /** 旧版本使用的缓存子目录名（默认 pi-workbench-updater） */
+  /** 更新缓存子目录名（默认 pi-workbench-updater） */
   legacyCacheDirName?: string
   logger?: UpdateLogger
   retries?: number
@@ -204,65 +194,53 @@ function pruneUpdaterCacheDir(cacheDir: string): void {
 }
 
 /**
- * Windows 安装完成后的缓存清理：删除下载残留（pending/、临时文件），
- * 保留 `{cacheBase}/{updaterCacheDirName}/installer.exe` 与 `current.blockmap`。
- * 目录里没有基准文件时整体移除。
+ * Windows 安装完成后的缓存清理：只操作 `{cacheBase}/{updaterCacheDirName}`，
+ * 保留差分基准 `installer.exe` 与 `current.blockmap`，绝不触碰同级的 `drafts/` 与 `temp/`。
  */
 export function pruneUpdateCache(cacheBase: string, updaterCacheDirName: string): void {
-  if (!fs.existsSync(cacheBase)) return
-  for (const entry of fs.readdirSync(cacheBase, { withFileTypes: true })) {
-    if (entry.isDirectory() && entry.name === updaterCacheDirName) continue
-    fs.rmSync(path.join(cacheBase, entry.name), { recursive: true, force: true })
-  }
   pruneUpdaterCacheDir(path.join(cacheBase, updaterCacheDirName))
-  if (fs.readdirSync(cacheBase).length === 0) {
-    fs.rmdirSync(cacheBase)
-  }
 }
 
 /**
  * 安装完成后的缓存清理。
  *
- * 安装器在安装完成后写入 `<cacheBase>.flag`；应用启动看到标记就清理外部缓存：
- * Windows 只删除下载残留（`pending/` 等），保留差分基准 `installer.exe` 与
- * `current.blockmap`；其他平台删除整个目录。安装器可能仍在退出、文件暂时被占用，
- * 因此带重试；失败时保留标记，下次启动继续清理。
- *
- * 同时清理旧版本遗留在安装目录内的更新缓存（Windows 迁移到外部缓存后不再使用）。
+ * 安装器在安装完成后写入 `{cacheBase}/{updaterCacheDirName}.flag`；应用启动看到标记就清理更新缓存：
+ * Windows 保留差分基准 `installer.exe` 与 `current.blockmap`；其他平台删除整个更新子目录。
+ * 绝不删除 `{cacheBase}` 本身或其下的 `drafts/` / `temp/`。
  */
 export async function cleanupCompletedUpdateCache(
   options: UpdateCacheCleanupOptions
 ): Promise<boolean> {
   const logger = options.logger ?? console
   const cacheBase = resolveUpdaterCacheBase(options)
-  const flagPath = `${cacheBase}.flag`
-  const legacyDirName = options.legacyCacheDirName ?? DEFAULT_PUBLISH_TARGET.updaterCacheDirName
+  const updaterDirName = options.legacyCacheDirName ?? DEFAULT_PUBLISH_TARGET.updaterCacheDirName
+  const flagPath = path.join(cacheBase, `${updaterDirName}.flag`)
+  const legacyFlagPath = `${cacheBase}.flag`
   const retries = Math.max(1, options.retries ?? 5)
   const delayMs = Math.max(0, options.delayMs ?? 500)
 
-  let pending = false
-  try {
-    pending = fs.existsSync(flagPath)
-  } catch {
-    pending = false
-  }
+  const activeFlags = [flagPath, legacyFlagPath].filter((candidate) => {
+    try {
+      return fs.existsSync(candidate)
+    } catch {
+      return false
+    }
+  })
+  let pending = activeFlags.length > 0
 
   if (pending) {
     for (let attempt = 1; attempt <= retries; attempt += 1) {
       try {
         if (options.platform === 'win32') {
-          pruneUpdateCache(cacheBase, DEFAULT_PUBLISH_TARGET.updaterCacheDirName)
+          pruneUpdateCache(cacheBase, updaterDirName)
         } else {
-          // 非 Windows 下 cacheBase 是 {appDir}/cache，只允许删更新子目录，绝不能误删 drafts/temp
-          fs.rmSync(path.join(cacheBase, legacyDirName), { recursive: true, force: true })
+          // 非 Windows 只删更新子目录，绝不能误删 drafts/temp
+          fs.rmSync(path.join(cacheBase, updaterDirName), { recursive: true, force: true })
         }
-        fs.rmSync(flagPath, { force: true })
-        logger.info(
-          options.platform === 'win32'
-            ? '[Updater] Pruned external update cache:'
-            : '[Updater] Cleared external update cache:',
-          cacheBase
-        )
+        for (const flag of activeFlags) {
+          fs.rmSync(flag, { force: true })
+        }
+        logger.info('[Updater] Cleaned completed update cache:', path.join(cacheBase, updaterDirName))
         pending = false
         break
       } catch (error) {
@@ -273,17 +251,6 @@ export async function cleanupCompletedUpdateCache(
           await delay(delayMs)
         }
       }
-    }
-  }
-
-  if (cacheBase !== path.join(options.appDir, 'cache')) {
-    try {
-      fs.rmSync(path.join(options.appDir, 'cache', legacyDirName), {
-        recursive: true,
-        force: true,
-      })
-    } catch (error) {
-      logger.warn('[Updater] Failed to clear legacy update cache:', errorMessage(error))
     }
   }
 
@@ -392,6 +359,8 @@ function readPublishTarget(resourcesPath: string): PublishTarget {
 
 export class UpdateController {
   private readonly appDir: string
+  private readonly installDir: string
+  private readonly portable: boolean
   private readonly emit: (state: UpdateState) => void
   private readonly currentVersion: string
   private readonly platform: NodeJS.Platform
@@ -411,6 +380,8 @@ export class UpdateController {
 
   constructor(options: UpdateControllerOptions) {
     this.appDir = options.appDir
+    this.installDir = options.installDir ?? options.appDir
+    this.portable = options.portable ?? false
     this.emit = options.emit
     this.currentVersion = options.currentVersion ?? app.getVersion()
     this.platform = options.platform ?? process.platform
@@ -423,7 +394,6 @@ export class UpdateController {
     this.cacheBase = resolveUpdaterCacheBase({
       appDir: this.appDir,
       platform: this.platform,
-      localAppData: options.localAppData,
     })
     this.fetchRelease =
       options.fetchRelease ??
@@ -433,9 +403,13 @@ export class UpdateController {
       status: this.supported ? 'idle' : 'unsupported',
       currentVersion: this.currentVersion,
       platform: this.platform,
-      canAutoInstall: this.supported && this.platform !== 'darwin',
+      canAutoInstall: this.supported && this.platform !== 'darwin' && !this.portable,
       downloadUrl: this.releasePageUrl(),
     }
+  }
+
+  private get usesManualDownload(): boolean {
+    return this.platform === 'darwin' || this.portable
   }
 
   getState(): UpdateState {
@@ -465,7 +439,7 @@ export class UpdateController {
     if (!this.supported) {
       return { success: false, error: UPDATE_ERROR.notPackaged }
     }
-    if (this.platform === 'darwin') {
+    if (this.usesManualDownload) {
       return { success: false, error: UPDATE_ERROR.manualDownload }
     }
     if (this.state.status === 'downloaded') {
@@ -494,7 +468,7 @@ export class UpdateController {
     if (!this.supported) {
       return { success: false, error: UPDATE_ERROR.notPackaged }
     }
-    if (this.platform === 'darwin') {
+    if (this.usesManualDownload) {
       return { success: false, error: UPDATE_ERROR.manualDownload }
     }
     if (this.state.status !== 'downloaded') {
@@ -541,8 +515,9 @@ export class UpdateController {
   private async runCheck(): Promise<UpdateCheckResult> {
     this.setState({ status: 'checking', message: undefined })
     try {
-      const result =
-        this.platform === 'darwin' ? await this.checkGithubRelease() : await this.checkUpdater()
+      const result = this.usesManualDownload
+        ? await this.checkGithubRelease()
+        : await this.checkUpdater()
       return result
     } catch (error) {
       const message = classifyUpdateError(errorMessage(error))
@@ -649,10 +624,10 @@ export class UpdateController {
     updater.allowDowngrade = false
     updater.logger = this.logger
     if (this.platform === 'win32') {
-      // 固定安装器目标为当前应用目录：不依赖注册表 InstallLocation，
-      // 避免卸载旧目录、却把新版装到默认目录的分叉。
+      // 固定安装器目标为当前程序安装目录（而非用户数据目录）：
+      // 不依赖注册表 InstallLocation，避免卸载旧目录却装到默认目录的分叉。
       // NSIS /D= 不允许尾随反斜杠；若路径含空格，uv_spawn 加引号可能导致 NSIS 忽略 /D=，记录警告。
-      const pinnedDir = this.appDir.replace(/[\\/]+$/, '')
+      const pinnedDir = this.installDir.replace(/[\\/]+$/, '')
       if (/\s/.test(pinnedDir)) {
         this.logger.warn('[Updater] Install directory contains spaces; NSIS /D= may ignore quoted paths:', pinnedDir)
       }
