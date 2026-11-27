@@ -4,7 +4,7 @@
 > **什么时候读**：要改架构、加子系统、或质疑某个技术选择时。
 > **什么时候要改**：定位 / 理念 / 进程模型 / 核心模块边界 / 技术选型发生变化时。
 
-**最后更新**: 2026-10-29 · **当前阶段**: Phase 6 持续优化
+**最后更新**: 2026-11-27 · **当前阶段**: 0.11.2+（Phase 0–2 安全、性能与架构演进完成）
 
 > 阶段状态见 [STATUS](./progress/STATUS.md)，任务与待办见 [BACKLOG](./progress/BACKLOG.md)，代码结构与频道表见 [PROJECT_STRUCTURE](./architecture/PROJECT_STRUCTURE.md)。
 
@@ -22,13 +22,13 @@
 
 1. **本地优先**：无云端依赖，配置与数据在应用目录内
 2. **Agent 原生**：Agent 直接读写工作区文件、执行命令
-3. **简洁可扩展**：扁平组件结构、独立 Zustand store、按域拆分 IPC
+3. **简洁可扩展**：按业务域分组组件与测试、独立 Zustand store、按域拆分 IPC + Zod 契约校验
 4. **跨平台**：Windows / macOS / Linux
 
 ### 目标用户
 
 - 希望用本地 AI Agent 辅助编码的个人开发者
-- 需要接入自定义模型端点（DeepSeek、中转站等）的用户
+- 使用 8 家主流预设供应商（API Key / OAuth 登录）并关注本地安全与可控权限的开发者
 - 偏好轻量工具而非完整 IDE 的用户
 
 ### 已打通的端到端能力
@@ -62,20 +62,15 @@ Electron 44（内置 Node 24）· React 19 · TypeScript 5.9 · Vite 5 · Zustan
 
 ### 安全边界
 
-- 渲染进程：`contextIsolation` + sandbox，无 Node 权限；所有能力经 preload 显式暴露。
-- Agent 仅运行在主进程；其工具（read/write/edit/bash）在主进程内直接操作文件系统 —— 安全边界靠进程隔离与审批策略，不靠 IPC 拦截。
-- API Key：磁盘加密（safeStorage，`enc:` 前缀）；`models.json` 只保存 `$PI_WORKBENCH_API_KEY` 变量名。
-- 插件系统**无沙箱**，仅面向个人可信项目；不向渲染进程加载插件 JS。
-- 生产构建注入 CSP（`script-src 'self'`）。
+- 渲染进程：`contextIsolation` + sandbox，无 Node 权限；所有能力经 preload 显式暴露；高危 IPC 经 `electron/ipc/schemas.ts`（Zod）校验。
+- Agent 仅运行在主进程（重 CPU 文档解析与仓库地图扫描走 `worker_threads`）；默认禁用不可信仓库 `.pi/extensions`（`projectTrusted: false`）；安全边界靠进程隔离、路径信任（含悬挂软链解析）与审批策略。
+- 凭证存储：磁盘加密（safeStorage，`enc:` 前缀，统一存 `config/credentials.json`）；`models.json` 只写 8 家预设白名单供应商的容量覆写，不含任何密钥或自定义端点。
+- 插件系统**无沙箱**，仅面向个人可信项目，加载与热重载按文件 SHA-256 哈希钉住；不向渲染进程加载插件 JS。
+- 生产构建与 `pw-file://` HTML 预览下发严格 CSP（`script-src 'self'`；HTML 预览默认离线并在外网请求时弹窗询问）。
 
 ### Web 开发模式（仅 `vite dev`）
 
-无 Electron 主进程时，由 Vite 中间件提供：
-
-- `/__pi/fetch-models`：代理供应商模型列表（规避 CORS，15s 超时）
-- `/__pi/agent/*`：在 Node 进程运行同一套 AgentManager，SSE 流式
-
-仅用于 UI / Agent 调试，功能少于 Electron（无审批、分支、计划、导出等）；生产必须用 Electron。
+无 Electron 主进程时，由 Vite 中间件提供 `/__pi/agent/*`（校验 `Host`/`Origin`、`Content-Type: application/json` 与随机 `X-Pi-Dev-Token`），在 Node 进程运行同一套 AgentManager，仅用于开发期 UI / Agent 调试，生产不启用。
 
 ---
 
@@ -145,7 +140,7 @@ Electron 44（内置 Node 24）· React 19 · TypeScript 5.9 · Vite 5 · Zustan
 | 数据位置 | 便携式应用目录 | 可整体迁移、无外部依赖（macOS 例外见 [BUILD_AND_PACKAGE §6](./guides/BUILD_AND_PACKAGE.md)） |
 | Agent 集成 | pi-coding-agent SDK | 内置工具与会话管理，避免自研 Agent 循环 |
 | Agent 工具文件访问 | 主进程直连 fs | SDK 设计如此；边界靠进程隔离 + 审批 |
-| 供应商配置 | 统一 OpenAI 兼容 + models.json | 支持 DeepSeek 等任意端点 |
+| 供应商配置 | 8 家内置预设 + Pi catalog + OAuth / safeStorage | 避免脆弱自定义端点，统一模型能力与凭证加密 |
 | 工作区存储 | SQLite（`data/workspaces.db`） | 记录打开时间与次数，单一来源 |
 | 插件系统 | 工作台插件宿主 | 只扩展工作台，默认不启用、无沙箱 |
 | Web 模式 | Vite dev 中间件 | 便于 UI / Agent 调试，不进生产 |

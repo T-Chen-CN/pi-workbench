@@ -10,12 +10,13 @@
 | 位置 | 角色 | 有没有 fs / bash |
 | --- | --- | --- |
 | `apps/cloud`（`@pi-workbench/cloud`） | 云端控制面 + 数据面 + **唯一的云端会话** | **没有**（工具白名单只有 6 个） |
-| `pi-bridge/src/cloud-protocol.ts` | 协议契约（帧、状态机常量、事件载荷） | — |
+| `packages/cloud-ui`（`@pi-workbench/cloud-ui`） | 桌面端与 Web 共享类型、WS 帧归并器、Paper & Ink 零桌面 store 原语与共享卡片/弹窗 | — |
+| `pi-bridge/src/cloud-protocol.ts` | 协议契约（Zod v4 帧校验、能力协商 `capabilities`、状态机常量、事件载荷） | — |
 | `electron/cloud/*` | 桌面端内置的终端执行器（device agent） | 有（工单在自己的 worktree 里跑） |
-| `apps/cloud/web-src/*` | Web 客户端（React + Tailwind + 共用流式渲染原语，本地 Vite 构建到 `web-dist/`） | — |
-| `src/components/CloudView.tsx` | 桌面端云端页（独立视图） | — |
+| `apps/cloud/web-src/*` | Web 客户端（React + Tailwind + `@pi-workbench/cloud-ui`，本地 Vite 构建到 `web-dist/`） | — |
+| `src/components/cloud/CloudView.tsx` | 桌面端云端页（独立视图，复用 `@pi-workbench/cloud-ui`） | — |
 
-三端共用**一套帧格式与流式渲染原语**（`StreamdownView` + `CloudTraceSection` + `StreamingTranscript`），状态归并仍按端解耦：桌面端云端页不用 `chatStore` / `workspaceStore` / `diffStore`。
+三端共用**一套 Zod 帧契约、帧归并器（`packages/cloud-ui`）与流式渲染原语**（`StreamdownView` + `CloudTraceSection` + `StreamingTranscript` + `TaskResultSection`），桌面端云端页完全解耦于本地 `chatStore` / `workspaceStore` / `diffStore`。
 
 ## 2. 进程与目录
 
@@ -29,13 +30,8 @@
 
 | 文件 / 目录 | 内容 |
 | --- | --- |
-| `accounts.json` | 唯一管理员：`scrypt` 哈希 + salt |
-| `devices.json` | 设备记录；token 只存 `SHA-256(token + salt)` |
-| `pairing.json` | 6 位一次性码（5 分钟，CAS 作废） |
-| `config.json` | 云端模型配置；API Key 为 AES-256-GCM 密文（`v1.iv.tag.ct`） |
-| `tasks.json` / `units.json` / `authorizations.json` | 工单、工作单元、授权台账 |
-| `client-state.json` | 多端已读游标（`lastReadSeq` / `lastReadAt`）与离线期基准 |
-| `memory/` | 持久记忆与留存文档（每日 `backup.sh` 自动备份）：`memories.json`（结构化记忆，手工条目硬保护）、`dreams.json`（梦境整理记录）、`AGENTS.md` / `SOUL.md`（白名单留存文档，Web 与桌面端透明可查可编辑） |
+| `cloud.db`（WAL） | Node 24 原生 `node:sqlite` 统一存储：管理员账号（`scrypt`）、设备与分权 token 哈希（`token` 执行通道 + `clientToken` 控制面）、6 位配对码（CAS 作废）、云端模型配置（AES-256-GCM 密文）、工单、独立 `task_diffs` 表（不混入快照/广播）、工作单元、授权台账、多端已读游标；首次启动自动一次性迁移旧 JSON 并保留备份 |
+| `memory/` | 持久记忆与留存文档（每日 `backup.sh` 自动备份）：`memories.json`（结构化记忆，手工条目硬保护 + 梦境事务回滚）、`dreams.json`（梦境整理记录）、`AGENTS.md` / `SOUL.md`（白名单留存文档，Web 与桌面端透明可查可编辑） |
 | `agent/` | 云端会话（Pi SDK 的 agentDir）：`sessions/*.jsonl` 是历史与导出的唯一真相源 |
 
 桌面端只落两处：`{appDir}/config/cloud-link.json`（token，`safeStorage` 加密）与
@@ -163,20 +159,20 @@
   `close_unit` 也走这条队列：设备离线时回收请求不会丢，重连后补发。
 - 单元相关帧：`close_unit`（服务端→设备，`reason: converged | user-close | sweep`）、
   `unit_closed`（设备→服务端，回收回执）、`unit_state`（设备→服务端，启动/重连的工作树状态）。
-- 协议版本不符直接拒绝（`v !== 1`）。服务端置 `fatal` 的错误帧，桌面端客户端通道同样进终止态
+- 协议版本保持 `v: 1` 向后兼容，全部入站 WS 帧经 `pi-bridge/src/cloud-protocol.ts` Zod v4 discriminated-union 校验，并在设备 `hello` 与快照 `snapshot.capabilities` 中声明协商能力（`CLOUD_PROTOCOL_CAPABILITIES` + `negotiateProtocolCapabilities`）。服务端置 `fatal` 的错误帧，桌面端客户端通道同样进终止态
   （`fatal: true`，停掉退避定时器 + 云端页常驻横幅），否则旧客户端会无限重连而提示只活在空对话里（F-47 / A-27）。
 - Web 控制台的登录态是 30 天固定期限的签名 cookie，**不续期**。过期后 WS 升级被 401 拒、浏览器只给 1006，
   所以握手失败时先回查 `/v1/me`：未登录即回登录页并提示「登录已过期」，不得停在「正在重连…」（REST 401 同路径）。
 
 ### 3.5 安全
 
-- 一机一 token（同一 token 开 `/client/ws` 与 `/device/ws`），云端只存加盐哈希。
-- 授权入口两端都有：Web 的「确认方案并授权」弹层 + 桌面端云端页同一个弹层
-  （`AuthorizeDialog` → 帧 `confirm_plan`）。这个动作本身不派活，只落「设备 × 仓库 + 额度」凭据。
-- 配对码 6 位一次性；`/v1/pair` 每来源 5 次 / 5 分钟 + 全局熔断 20 次 / 5 分钟；
-  所有凭据类失败对外同一个错误码（不透露「码是否存在 / 过期 / 用过」）。
-- 账号类操作（建账号、登录、生成配对码、移除设备）只认 cookie 会话；
-  设备 token 只够**改云端模型配置、读快照与授权**（桌面端没有 cookie）。
+- **双 Token 分权**（配对一次签发两枚独立凭证，云端均只存加盐哈希）：
+  - `token`（设备执行凭证）：仅限 `/device/ws`、`PUT /v1/workspaces` 与自解绑，**无法访问控制面 REST 与 `/client/ws`**。
+  - `clientToken`（桌面控制面凭证）：访问 `/client/ws`、跨设备授权、模型配置、记忆与文档管理。
+- 授权入口两端都有：Web 的「确认方案并授权」弹层 + 桌面端云端页同一个共享弹层
+  （`@pi-workbench/cloud-ui` `AuthorizeDialog` → 帧 `confirm_plan`）。这个动作本身不派活，只落「设备 × 仓库 + 额度」凭据。
+- 配对码 6 位一次性；`/v1/pair` 按来源 IP（仅可信本机反代取 `X-Forwarded-For` 右侧，不信任 `X-Real-IP`）限速 5 次 / 5 分钟，并与管理员登录解耦；首次 `/v1/setup` 支持 `PI_CLOUD_SETUP_TOKEN` 一次性启动口令与 15s body 超时。
+- 账号类操作（建账号、登录、生成配对码、移除设备）只认 cookie 会话；Cookie 路由与 WS 强制校验精确非空 `Origin`。
 - Web 客户端零 XSS：源码禁用 `innerHTML` / `dangerouslySetInnerHTML` / `eval`，Markdown 经 `StreamdownView`（`rehype-sanitize`）净化，静态文件走白名单与严格单段 `/assets/` 校验（`src/http/static.ts`）+ 无 `eval`/WASM CSP。
 - 云端 API Key 加密落盘、接口只回末四位；Web / 桌面端写的是同一份配置。
 
@@ -223,7 +219,7 @@ SDK 初始化上；配置解密失败时才每次快照都往 hub 推一条 `mis
 
 1. **草稿与配置态留在父级状态，不因标签切换或 WS 帧丢失**：聊天草稿（`draft`）、配置草稿（`configDraft`）、目录缓存（`configModels`）与文档草稿（`docDrafts`）全部由 `CloudWebApp` 持有，拉取模型目录通过函数式状态更新只补默认模型，绝不覆盖用户已输入的 API Key；保存成功后才清 `configDraft`。
 2. **折叠右栏与 WS 增量更新绝不重建聊天区与编辑器 DOM**：消息行按 `React.memo` 隔离，右栏折叠只切换侧栏节点，会话输入框与记忆页 `AGENTS.md` 文本框在收到流式 / `task` / `read_state` 帧时始终保持 DOM 实例与焦点。
-`tests/cloud-web-config-form.test.tsx` 与 `tests/cloud-web-app.test.tsx` 通过 Testing Library + jsdom 覆盖上述行为及流式思考块与 Streamdown 安全渲染回归。
+`tests/cloud/cloud-web-config-form.test.tsx` 与 `tests/cloud/cloud-web-app.test.tsx` 通过 Testing Library + jsdom 覆盖上述行为及流式思考块与 Streamdown 安全渲染回归。
 
 ## 4. 本机运行
 

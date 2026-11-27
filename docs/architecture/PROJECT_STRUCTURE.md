@@ -4,7 +4,7 @@
 > **什么时候读**：新增模块 / 频道、接手陌生代码、写设计文档之前
 > **什么时候要改**：目录、频道、进程模型或关键数据流变化时
 
-**最后更新**: 2026-11-21
+**最后更新**: 2026-11-27
 
 ---
 
@@ -31,9 +31,11 @@ pi-workbench/
 │   ├── main.ts                   # 启动、窗口与生命周期装配
 │   ├── preload.cts               # contextBridge（编译为 CommonJS preload.cjs）
 │   ├── app-paths.ts              # 便携式应用目录
-│   ├── workspace-trust.ts        # 工作区信任与路径包含
-│   ├── ipc/                      # 按域注册 IPC（agent / providers / attachments / documents / files / git / settings / system / web-search* / workspace）
-│   ├── documents/                # 文档解析（零依赖）：zip / xml / ooxml / pdf / detect / preview / render-bridge
+│   ├── workspace-trust.ts        # 工作区信任与路径包含（lstat/readlink/realpath 防悬挂软链）
+│   ├── path-safety.ts            # 纯 Node 路径安全工具（Worker 可复用，不引 electron）
+│   ├── worker-runner.ts          # 轻量 worker_threads 执行器（文档解析 / 仓库地图卸载）
+│   ├── ipc/                      # 按域注册 IPC + schemas.ts（高危入参 Zod 校验）
+│   ├── documents/                # 文档解析（零依赖，documents-worker.ts 跑在 worker_threads）
 │   │   ├── zip.ts                # node:zlib 手写 ZIP 中央目录（不引第三方）
 │   │   ├── xml.ts                # 流式 XML 扇描（不建 DOM）
 │   │   ├── ooxml.ts              # docx / xlsx / pptx / odt / epub 解析（同时出 Agent 文本与预览块）
@@ -63,13 +65,13 @@ pi-workbench/
 │   ├── external-links.ts         # 外链协议白名单（https / http / mailto）
 │   ├── scheme-privileges.ts      # 自定义 scheme 权限声明
 │   ├── file-protocol.ts          # 文件预览协议（图片 / PDF / 媒体）
-│   ├── aux-window.ts             # 辅助窗口（可拖出面板）
-│   ├── window-morph.ts           # 面板在主窗口与辅助窗口间迁移
+│   ├── aux-window.ts             # 辅助窗口（纯 DOM Portal，不继承 preload；原生 titleBarOverlay）
+│   ├── boot-window.ts            # 主窗口启动管理器（即时目标尺寸打开，无形变动画）
 │   ├── git-cache.ts              # Git 命令结果缓存
 │   ├── git-worktrees.ts          # 会话工作树与 session-git.json
 │   ├── worktree-coordinator.ts   # 工作树切换在轮次边界生效
-│   ├── worktree-deps.ts          # 链接工作树依赖探测与后台安装
-│   ├── repo-map.ts               # 仓库地图：Git 跟踪文件 → 职责事实表（只读 + 增量缓存）
+│   ├── worktree-deps.ts          # 链接工作树依赖探测与安装（默认关闭自动安装）
+│   ├── repo-map.ts               # 仓库地图：Git 跟踪文件 → 职责事实表（repo-map-worker.ts 卸载扫描）
 │   ├── repo-map-canvas.ts        # 画布布局落盘（repo-map-canvas.json，读 + 清洗 + 原子写）
 │   ├── repo-watcher.ts           # 仓库状态监听
 │   ├── repo-sync.ts              # 分支拉取 / 同步
@@ -86,65 +88,17 @@ pi-workbench/
 │   └── tsconfig.preload.json     # preload 构建（CommonJS）
 │
 ├── src/                          # React 渲染进程
-│   ├── components/               # 扁平结构，无子目录
-│   │   ├── AgentMarkdown.tsx     # 桌面端 Markdown 包装（注入路径打开与外链 IPC）
-│   │   ├── StreamdownView.tsx    # 统一流式 Markdown 渲染原语（Streamdown v2 + CJK/KaTeX/Mermaid + 零 WASM Shiki）
-│   │   ├── CloudTraceSection.tsx # 可折叠思考与工具轨迹块（桌面端云端页与 Web 共用）
-│   │   ├── TaskResultSection.tsx # 工单单行去噪摘要与折叠 Markdown 结果报告（桌面端云端页与 Web 共用）
-│   │   ├── StreamingTranscript.tsx # 统一贴底滚动容器与回底浮动按钮（use-stick-to-bottom）
-│   │   ├── AgentTrace.tsx        # 思考、文本、工具步骤时间线
-│   │   ├── ApprovalCard.tsx      # 工具审批卡
-│   │   ├── ChatPanel.tsx         # 会话面板入口（调用 controller hook）
-│   │   ├── ChatHeader.tsx        # 顶部与会话标签
-│   │   ├── ChatPanelHeader.tsx   # 聊天面板头部（收起 / 标题 / 工作树 chip / 拖出柄）
-│   │   ├── ChatTranscript.tsx    # 虚拟化消息滚动区
-│   │   ├── ChatMessageRow.tsx    # 消息行、任务与变更摘要
-│   │   ├── ChatApiKeyPrompt.tsx  # 未配置 API Key 的提示
-│   │   ├── VirtualRows.tsx       # 共享虚拟列表渲染
-│   │   ├── ChatSessionList.tsx   # 会话抽屉（搜索、置顶、归档、导出）
-│   │   ├── CommandPalette.tsx    # 命令面板（Ctrl+Shift+P）
-│   │   ├── DialogHost.tsx        # 应用内确认 / 输入对话框
-│   │   ├── DiffViewer.tsx        # Split / Unified Diff 查看器
-│   │   ├── ErrorBoundary.tsx     # 渲染错误兜底
-│   │   ├── FileExplorer.tsx      # 文件树、新建/重命名/删除、监听刷新
-│   │   ├── IPCDebug.tsx          # 开发调试面板（仅 DEV）
-│   │   ├── MonacoEditor.tsx      # Monaco、每文件 model、自动保存、草稿
-│   │   ├── SelectionQuoteButton.tsx # 划词「引用到对话」浮起按钮
-│   │   ├── SessionTabs.tsx       # 聊天面板内的会话标签
-│   │   ├── Settings.tsx          # 通用 / API / 权限 / 快捷键 / 关于
-│   │   ├── TerminalPanel.tsx     # xterm + PTY、输出附加或复制
-│   │   ├── Toast.tsx             # Toast 展示组件
-│   │   ├── ToolResultViewer.tsx  # 工具结果全量查看
-│   │   ├── UpdateDialog.tsx      # 更新下载完成弹窗
-│   │   ├── UpdateStatusIndicator.tsx # 状态栏更新提示
-│   │   ├── WelcomeScreen.tsx     # 欢迎页与最近工作区
-│   │   ├── WorkspacePickerDialog.tsx # 标签栏 `+` 的弹窗：历史工作区 + 新增工作区
-│   │   ├── WindowControls.tsx    # 自绘窗口按钮（Windows / Linux）
-│   │   ├── WorkspaceView.tsx     # 单个工作区的常驻三栏视图
-│   │   ├── BootScreen.tsx        # 启动引导占位
-│   │   ├── BrandSeal.tsx         # 品牌印章（欢迎页 / 空状态）
-│   │   ├── EditorTabs.tsx        # 编辑器标签栏（面板标签 + 未保存与预览状态）
-│   │   ├── FileView.tsx          # 编辑区容器：面板 / 文件视图分发（按类型路由）
-│   │   ├── WorkspacePanel.tsx    # 工作区面板：工具条 / 搜索 / 降级提示 + 画布容器
-│   │   ├── RepoMapCanvas.tsx     # 仓库地图：底层地图 + 上浮链（平移 / 缩放 / 拖动 / 吸附 / LOD / 小地图）
-│   │   ├── RepoMapNodeCard.tsx   # 画布卡片（文件夹卡 / 文件卡）
-│   │   ├── RepoMapMinimap.tsx    # 画布小地图（SVG 缩略图 + 视口框）
-│   │   ├── MarkdownReadingView.tsx # Markdown 阅读视图（块级范围渲染）
-│   │   ├── PdfReadingView.tsx    # PDF 阅读（pdf.js）
-│   │   ├── OfficeDocumentView.tsx # Word / 表格 / 幻灯片 / EPUB 只读预览
-│   │   ├── MediaView.tsx         # 图片 / 二进制预览
-│   │   ├── HtmlPreview.tsx       # HTML 沙箱预览
-│   │   ├── GitView.tsx           # 只读 Git 视图（提交图 / 工作树更改）
-│   │   ├── CommitDetailView.tsx  # 提交详情覆盖层
-│   │   ├── WorktreeChip.tsx      # 会话工作树切换 chip（合并入聊天头部）
-│   │   ├── GithubSettings.tsx    # GitHub 关联（设备码登录 / PAT）
-│   │   ├── WebSearchSettings.tsx # 联网搜索供应商设置
-│   │   ├── PanelSlot.tsx         # 可停靠面板槽位
-│   │   ├── PanelDragHandle.tsx   # 面板拖拽把手
-│   │   ├── PanelWindowFrame.tsx  # 独立面板窗口外壳
-│   │   ├── PanelContextMenu.tsx  # 面板右键菜单
-│   │   ├── ui.tsx                # Button / Input / Modal 等基础组件
-│   │   └── patterns.tsx          # Card / Stat / ListRow 等内容模式
+│   ├── components/               # 按业务域分组（10 个子目录）
+│   │   ├── chat/                 # AgentMarkdown / AgentTrace / ApprovalCard / Chat* / SessionTabs / ToolResultViewer
+│   │   ├── cloud/                # CloudStatusIndicator / CloudTraceSection / CloudView / TaskResultSection
+│   │   ├── editor/               # DiffViewer / EditorTabs / FileView / HtmlPreview / MarkdownReadingView / MediaView / MonacoEditor / OfficeDocumentView / PdfReadingView / TerminalPanel
+│   │   ├── files/                # FileExplorer
+│   │   ├── git/                  # CommitDetailView / GitView / WorktreeChip
+│   │   ├── panels/               # PanelContextMenu / PanelDragHandle / PanelSlot / PanelWindowFrame
+│   │   ├── repo-map/             # RepoMapCanvas / RepoMapMinimap / RepoMapNodeCard / WorkspacePanel
+│   │   ├── settings/             # GithubSettings / ProviderAuthPanel / ProviderSettings / Settings / UpdateDialog / UpdateStatusIndicator / WebSearchSettings
+│   │   ├── ui/                   # ui / patterns / BrandSeal / BootScreen / DialogHost / ErrorBoundary / SelectionQuoteButton / Toast / VirtualRows / WindowControls / StreamdownView / StreamingTranscript / IPCDebug
+│   │   └── workspace/            # CommandPalette / WelcomeScreen / WorkspacePickerDialog / WorkspaceView
 │   ├── store/                    # 每个功能域一个 store（16 个）
 │   │   ├── approvalStore.ts      # 待审批请求
 │   │   ├── chatStore.ts          # 消息、草稿、附件、排队、用量
@@ -189,7 +143,7 @@ pi-workbench/
 │   │   └── index.ts              # 编辑器通用类型
 │   └── i18n/                     # 中英文文案与错误本地化
 │
-├── tests/                        # 扁平测试目录（文件名与源码同名）
+├── tests/                        # Vitest 单元 / 组件测试（按域分子目录：agent / cloud / electron / git / ui / utils）
 │
 ├── packages/cloud-ui/            # 桌面端与云端 Web 共享 UI（npm workspace，零 Electron / zustand / 桌面 store 依赖）
 │   └── src/                      # types / format / frameReducer / primitives / cards
@@ -218,7 +172,8 @@ pi-workbench/
 │
 ├── pi-bridge/                    # Agent 桥接层（主进程内运行）
 │   ├── src/
-│   │   ├── agent-manager.ts      # 会话 / 模型配置 / 工具编辑捕获 / 历史 / 导出
+│   │   ├── agent-manager.ts      # 会话协调入口（拆分出 agent-runtime-types / agent-session-events / agent-title-service / agent-catalog）
+│   │   ├── session-view.ts       # 聊天消息唯一投影（deriveMessages / 持久化 entryId / 聚合 usage）
 │   │   ├── environment.ts        # 环境租约（工作区级共享资源）
 │   │   ├── model-config.ts       # models.json 读写与 key 插值
 │   │   ├── approval-policy.ts    # 会话模式与审批策略
@@ -245,7 +200,7 @@ pi-workbench/
 │   │   └── index.ts              # 对外导出
 │   └── dist/                     # 构建产物（不纳入版本库）
 │
-├── tests/                        # Vitest 单元 / 组件测试（扁平，文件名与源码同名）
+├── tests/                        # 按域分子目录（agent / cloud / electron / git / ui / utils）
 ├── docs/                         # 项目文档
 ├── vite.config.ts                # Vite + 仅开发环境的 dev 中间件
 ├── vitest.config.ts
@@ -275,11 +230,7 @@ pi-workbench/
 所有能力经 preload 显式暴露。Agent 只在主进程运行。
 
 **Web 开发模式**（`npm run web:dev`）：没有 Electron 主进程，`vite.config.ts` 中仅 `serve`
-生效的中间件提供：
-
-- `/__pi/fetch-models` — 代理供应商 `/models`（规避 CORS，15s 超时）
-- `/__pi/agent/{init,chat,chat-stream,abort,dispose}` 与会话列表/标签端点 —
-  在 Vite 的 Node 进程中运行同一套 AgentManager；该桥为调试用，功能少于 Electron，且默认自动放行工具
+生效的中间件提供 `/__pi/agent/{init,chat,chat-stream,abort,dispose}` 与会话列表/标签端点（校验 `Host`/`Origin`、`Content-Type: application/json` 与随机 `X-Pi-Dev-Token`），在 Vite 的 Node 进程中运行同一套 AgentManager；该桥仅用于开发调试，生产不启用。
 
 ---
 
@@ -373,7 +324,8 @@ ChatPanel.handleSubmit
 
 ### 新增组件 / Store
 
-- 组件放 `src/components/`，扁平结构，Tailwind 写样式
+- 组件按业务域放入 `src/components/{chat,cloud,editor,files,git,panels,repo-map,settings,ui,workspace}/`，Tailwind 语义 token 写样式
+- 测试按域放入 `tests/{agent,cloud,electron,git,ui,utils}/`
 - Store 放 `src/store/`，每个功能域一个；状态更新必须不可变（创建新对象/数组）
 - 工作区级状态用 `xxxStoreFor(workspacePath)` 工厂（铁律见 [AGENTS.md §4](../../AGENTS.md)）
 

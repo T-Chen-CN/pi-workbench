@@ -24,6 +24,8 @@
 | P-02 | 云端 OAuth 登录（D18 / D19） | P2 | ⬜ 未做：服务端 auth flow（`start` / `events` / `answer` / `cancel`）+ 临时状态表（PKCE verifier、device code，**不可跨实例**）+ 云端配置页登录 UI + 成功凭证写回 `CloudConfigRecord.credentialCipher`。四条路径各一次：`xai` device code · `anthropic` copy-code · `openai-codex` device code · `openai` 粘贴回调 URL |
 | P-03 | 供应商预设的真实凭证手工验收（发布前必做） | P1 | ⬜ 未做（清单见 [provider-presets §11.2](../architecture/provider-presets.md)）：8 家 × api_key 各一次；4 条 OAuth（含验证 `openai` 粘贴回调 `client_id` 换 token 与各家订阅策略）；下调上下文/输出上限在**轮次边界**生效且不打断；换模型档位自动降级；会话模型回落不弹提示；云端配置页 Key 只回掩码 |
 | S-01 | 工作区级 `.pi/extensions` / `.pi/settings.json` 显式信任机制 | P2 | ⬜ 未做：阶段 0 已默认以 `projectTrusted: false` + `noExtensions: true` 封堵打开不可信仓库即执行扩展的 RCE 风险；后续按需评估是否增加类似 VS Code Workspace Trust 的按工作区显式弹窗授权与持久化信任开关 |
+| D-01 | 便携式 `{appDir}` 目录 vs 标准每用户 `userData` + 可选便携模式（含 `build/installer.nsh` 瘦身） | P2 | ⬜ 待单独讨论：Phase 2 暂保持 `{appDir}/{config,cache,data,logs}` 与现有 NSIS 升级脚本不变；后续单独评估标准每用户目录与可选便携模式方案及旧数据迁移策略 |
+| D-02 | 托管工作树存放位置（仓库内 `.pi-workbench/worktrees/` vs 仓库外独立缓存目录） | P2 | ⬜ 待单独讨论：Phase 2 暂保持 `.pi-workbench/worktrees/` 不变；后续单独评估迁至仓库外独立目录（如 `{appDir}/cache/worktrees/<repoHash>/<id>`）以规避 Node 模块向上查找污染与依赖脚本复杂度 |
 | V-01 | macOS 手动验收（universal dmg） | 发布前 | ⬜ 未做 |
 | V-02 | Linux 手动验收（AppImage） | 发布前 | ⬜ 未做 |
 
@@ -33,6 +35,7 @@
 
 ### 已交付（只留一行，细节在 git）
 
+- 2026-11-27 **Phase 0–2 深度审计整改与架构演进（安全止血 + 前端/云端瘦身 + 架构与工程治理升级）**：完成全仓 12 项 P0 安全封堵与数据防丢修复；完成云端 `node:sqlite` (WAL) 持久化迁移、`packages/cloud-ui` 共享包抽离与前端/产物瘦身；完成 Phase 2 全部既定里程碑——剩余并发/插件哈希/云端记忆与梦境回滚加固、`electron/documents/*` 与 `repo-map.ts` 迁入 `worker_threads` + 热路径异步化、`AgentManager` 按域拆分 + `pi-bridge/src/session-view.ts` 单一聊天渲染投影（持久化 `entryId` + 轮末自愈 + 多步聚合 `usage`）、高危 IPC 与云端 WS 协议 Zod 校验与能力协商、Windows/Linux 原生 `titleBarOverlay`（恢复 Win11 Snap Layouts）+ 取消 1 秒启动形变 + `prefers-reduced-motion` + A11y / `RepoMapCanvas` / 前端虚拟化优化、ESLint `jsx-a11y` + 跨包边界 + AST 色值门禁、全仓 `src/components/`（10 域）与 `tests/`（6 域）按业务域重组，以及 `DESIGN_SYSTEM.md` 瘦身与文档同步（便携目录 `D-01` 与托管工作树位置 `D-02` 按所有者要求保留待单独讨论）。
 - 2026-11-26 **C-03 云端 Agent P1 功能簇（全部落地并上线验证）**：落地脱敏结果 diff 回传（终端 `collectTaskDiff` 排除敏感/二进制/锁文件、命中密钥脱敏、按 32KB/128KB 上限裁剪，云端 `get_task({ includeDiff: true })` 按需拉取，不推 UI / 不塞 `done` 唤醒帧）；落地多端已读未读同步（F-52，`mark_read` / `POST /v1/read` / `read_state` 广播，Web 标题与标签角标 + 桌面端状态栏角标 + 托盘 Tooltip / `setBadgeCount` / Windows `setOverlayIcon`）；落地云端持久记忆（`${dataDir}/memory/`，`session_before_compact` 压缩前自动抽取、`before_agent_start` 预算内 Top-K 注入、空闲 30m 梦境整理与手工记忆硬保护、白名单留存文档 `AGENTS.md` / `SOUL.md` 在 Web 与桌面端透明可查可编辑，覆盖 A-25）；打磨运行中/提问中工单 `task_message` 直达追加指令与终端确认里程碑，并补齐并发压测（10 设备 20 工单并发上限 8 + FIFO 补发、配额原子防超发、220 事件风暴重连补齐），同时修复并发 `tryDispatch` 落盘与极速回包的竞态。
 - 2026-11-26 **P-05 & P-07（SDK 实测收口与探测修复 + models.dev 独立富数据）**：实测 8 家 `/models` 端点（全部存在；修复桌面端对 Google / xAI 无效 Key 返回 HTTP 400 的误放行并避免误判地区受限）、核实并单测钉住 `clampMaxTokensToContext` 边界与 `openai` 粘贴回调解析；落地完全解耦于 Pi catalog 的 `models.dev` 富数据模块与 `cache/models-dev.json`（ETag / 12h TTL / `PI_OFFLINE` 与失败静默降级），在供应商设置页展示模型价格、多模态、知识截止、发布时间、开源权重与废弃状态。
 - 2026-11-26 **C-01 云端 Agent（P0 部署与真派活闭环验收完成）**：最新版本（含 0.11.0 预设供应商、C-02/C-04/C-05/C-06/C-07/P-09 与授权提示增强、Key 探测报错透出、Web 重渲染模型下拉修复）部署至自托管云端实例，本地自包含包 35/35 + 30 个云端测试文件 211/211 全绿；线上完成真实 Google 模型对话、配对、确认授权、隔离 worktree 派活执行、里程碑实时唤醒、结果汇报、干净工作树自动回收、服务重启重连与安全/真相源隔离全项复核。
@@ -62,4 +65,4 @@
 ---
 
 **维护者**: Pi Workbench Team
-**最后更新**: 2026-11-26
+**最后更新**: 2026-11-27

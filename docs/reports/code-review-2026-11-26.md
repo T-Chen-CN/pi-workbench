@@ -344,9 +344,9 @@
   - [x] 修复 `session.bindExtensions()`、`thinkingLevelsOf`、`TASK_COMPACTION_SETTINGS` 覆盖、`CloudTaskRunner` 会话释放/重建/并发锁、`repo-autofetch` 转义正则、`detect.ts` `%PDF-` 魔数、`ooxml.ts` 单元格预算与 PPTX 按需读图/真实 `sourcePath`、`render-bridge` 固定主窗、`terminateTree`/`ChildRegistry`/`TerminalManager` 杀树顺序与日志写竞态、`system-proxy` 隔离 session/放行回环/代理 WS、`main.ts` 关闭超时预算
   - [x] 补齐全仓 7 份 tsconfig 的 `type-check`（含 `electron/tsconfig.json` `**/*.ts`）与 `ci.yml` / `cloud-release.yml` 门禁，`build-cloud-bundle.mjs` 按根 `package-lock.json` 锁定版本，`update.sh` 校 `ready: true`（`hasConfig` 联动），收回 `pi-cloud.service` `/var/backups/pi-cloud` 写权限
 
-### Phase 2：架构演进与规则重构（中长期）
-- [ ] 将 `electron/documents/*`、`repo-map.ts`、`PluginManager`（加代码哈希校验）迁至 `worker_threads` / `utilityProcess`，逐步演进 `AgentRegistry` 进程隔离并消除 168 处主线程 `*Sync`
-- [ ] 拆分 3,234 行 `AgentManager`，落地 `chat-render-single-source.md`（用 `entryId` 统一分支/历史/流式）
-- [ ] Desktop IPC 与 Cloud WS 协议引入 Zod Schema-First 单一契约与协议能力协商
-- [ ] 引入 Radix UI / React Aria 替换手搓 `Modal`/`PopoverMenu`/`Tab`；恢复 `titleBarOverlay`（Win11 Snap Layouts）、取消 1 秒 `setBounds` 动画、恢复 `prefers-reduced-motion`；`RepoMapCanvas` 改为按需打开或切换 `@xyflow/react`
-- [ ] 重写瘦身 `AGENTS.md` 与 `DESIGN_SYSTEM.md`：放开按域分子目录、采用 Context 托管工作区 Store、以 ESLint（`jsx-a11y` + AST + 边界规则）取代正则单测、回归标准每用户目录 + 可选便携模式
+### Phase 2：架构演进与规则重构（2026-11-27 按所有者确认范围落地）
+- [x] 将 `electron/documents/*`、`repo-map.ts` 迁至 `worker_threads`（`electron/worker-runner.ts` + `documents-worker.ts` + `repo-map-worker.ts`），清除热路径 `*Sync`（`logger.ts` 异步缓冲、`draft-store.ts` 异步化、`workspace-store.ts` 开启 WAL），并为 `PluginManager` 补齐代码 SHA-256 哈希钉住与异步 `deactivate` / 子模块缓存清理（`AgentRegistry` 保持主进程运行）
+- [x] 拆分 3,234 行 `AgentManager`（`agent-runtime-types.ts`、`agent-session-events.ts`、`agent-title-service.ts`、`agent-catalog.ts`），落地 `pi-bridge/src/session-view.ts` 单一聊天渲染投影（持久化 `entryId` / `userEntryId`、多步聚合 `usage`、轮末 `reconcileMessages` 自愈）
+- [x] 高危 Electron IPC（`electron/ipc/schemas.ts`）与云端 WS 协议（`pi-bridge/src/cloud-protocol.ts`）引入 Zod v4 校验与协议能力协商（向后兼容 `v: 1`）
+- [x] 保留 Paper & Ink 自绘组件同时修完 Modal Portal/`inert`、Tab 兄弟关闭按钮、焦点陷阱/Escape 穿透与对比度缺陷；Windows/Linux 切换原生 `titleBarStyle: 'hidden' + titleBarOverlay`（恢复 Win11 Snap Layouts），取消 1 秒启动 `setBounds` 动画，恢复 `prefers-reduced-motion`；升级 `RepoMapCanvas`（视口裁剪、多命中搜索计数与上下跳转、面包屑一键回根、`O(N)` 去重、空格排除扩展、大目录自动平移）并补齐 `GitView`/`OfficeDocumentView` 虚拟化与 `chatStore` `O(1)` 忙碌计数
+- [x] 瘦身重写 `DESIGN_SYSTEM.md`（≤300 行）与同步 `AGENTS.md` 及过期文档；落地 ESLint `jsx-a11y` + 跨包边界 + AST 色值门禁；全仓重组 `src/components/`（10 域）与 `tests/`（6 域）；便携目录（`D-01`）与托管工作树存放位置（`D-02`）按所有者决策记入 [BACKLOG](../progress/BACKLOG.md) 待单独讨论

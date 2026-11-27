@@ -4,8 +4,8 @@
 > **什么时候读**：动 `src/hooks/useChatPanelState.ts`（实时 `parts`）或 `pi-bridge/src/session-entries.ts`（重载重建）之前
 > **什么时候要改**：方案开始实施、范围变化或已有部分落地时
 
-- **状态**：设计稿，**未实施**（动因：同一段历史有两套渲染逻辑；等本方案根治插话位置问题）
-- **日期**：2026-10-29
+- **状态**：**已实施**（2026-11-27，Phase 2 Milestone 3 落地：`pi-bridge/src/session-view.ts` `deriveMessages` 唯一投影、持久化 `entryId` / `userEntryId` 稳定分支锚点、多步聚合 `usage` 映射、压缩点仅扫 `getBranch()`、`parentToolCallId` 透传，以及 `chatStore.reconcileMessages` 轮末以磁盘记录自愈；注：因 Pi SDK `write` 工具返回 `details: undefined`，轮次 `edits` 改动卡在轮末对账时保留运行期摘要，重载后仍可在 `ToolResultViewer` 查看单步详情）
+- **日期**：2026-10-29（2026-11-27 落地更新）
 - **动因**：需求 8（插话）暴露的根因不是"插话位置算错了"，而是**同一段历史有两套渲染逻辑**
 - **依赖文档**：[ADR-003](../decisions/ADR-003-session-record-single-source.md)（会话记录是单一真相源）
 - **不在范围**：Agent 协议、终端、Git 面板、托盘与更新；本方案不改 JSONL 格式

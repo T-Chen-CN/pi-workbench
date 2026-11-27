@@ -31,7 +31,9 @@ export function isTrustedIpcSender(event: IpcMainInvokeEvent): boolean {
 
 校验失败返回 `{ success: false, error: 'Untrusted IPC sender' }`（**fail-closed**，不是放行也不是抛错）。
 
-**面板辅助窗口是登记的例外**：拆出的 `BrowserWindow` 由 `window.open('about:blank')` 创建、加载同一段 preload，`electron/aux-window.ts` 在窗口创建时 `trustIpcSender(webContents.id)` 登记、销毁时 `untrustIpcSender(id)` 移除，因此拆出的面板可以直接调 IPC（复制、外链、会话、工作树 chip 等都照旧可用）。两个函数收的是 **id 数字**而不是 webContents 对象：窗口销毁后读 `win.webContents` 会抛 `Object has been destroyed`，而 `closed` 回调正跑在销毁之后。登记表只存 WebContents id，不扩大文件写入权限；子框架仍然被拒（见上面最后一行）。细节见 [panels-and-windows](panels-and-windows.md)。
+**面板辅助窗口为纯 DOM Portal**：拆出的 `BrowserWindow` 由主框架经 `window.open('about:blank')` 创建，**不继承 `preload`、也不登记 `trustIpcSender`**；Portal 内所有 React 事件与 IPC 调用均运行在主窗口 JS Realm 中并天然经由主窗口 `webContents` 校验。来自 `pw-file:` 等非主框架来源的 `window.open` 一律拒绝（封堵 HTML 预览沙箱逃逸）。细节见 [panels-and-windows](panels-and-windows.md)。
+
+**高危 IPC 入参经 Zod 校验**：`electron/ipc/schemas.ts` 定义文件写/删/重命名、设置保存、终端创建/写入/缩放、Git 与云端配对/发帧等高危入参的 Zod v4 Schema；解析失败统一返回 `{ success: false, error: ... }`，不落盘脏结构。
 
 ## 2. 新增一个 IPC 的 4 步
 
@@ -88,10 +90,10 @@ export function isTrustedIpcSender(event: IpcMainInvokeEvent): boolean {
 
 ## 6. Web 调试桥
 
-`vite.config.ts` 里有三个开发期插件：`devModelsProxy`（`apply: 'serve'`，代发 `/models` 请求，避开 CORS，Key 走请求头）、`devAgentBridge`（`apply: 'serve'`，在 Node 里跑同一套 `AgentManager`，通过 SSE 输出）、`contentSecurityPolicy`（`apply: 'build'`，只在打包产物里注入 CSP）。
+`vite.config.ts` 里有两个开发/构建插件：`devAgentBridge`（`apply: 'serve'`，在 Node 里跑同一套 `AgentManager` 并通过 SSE 输出，强制校验 `Host`/`Origin`、`Content-Type: application/json` 与随机 `X-Pi-Dev-Token`）、`contentSecurityPolicy`（`apply: 'build'`，在打包产物里注入 CSP）。
 
-浏览器环境没有 `electronAPI` 时，`src/api/index.ts` 自动回退到 HTTP / mock，因此**新增 API 时两套实现都要过一遍**。
+`src/api/index.ts` 的 `mockAPI` 仅在 `import.meta.env.DEV` 下挂载（生产 Electron 包完全裁剪），新增 API 时同步更新类型与 DEV mock。
 
-## 7. CSP 约束（生产）
+## 7. CSP 约束（生产与 HTML 预览）
 
-`script-src 'self'`：**不要引入内联脚本或远程脚本**。`style-src` 允许 inline（Monaco 运行时注入 `<style>`）；`worker-src 'self' blob:`（Monaco worker）；`img-src`/`media-src`/`frame-src`/`connect-src` 额外允许 `pw-file:`（只读文件协议）。新增资源协议时必须同步改 `CONTENT_SECURITY_POLICY`。
+`script-src 'self'`：**不要引入内联脚本或远程脚本**。`style-src` 允许 inline（Monaco 运行时注入 `<style>`）；`worker-src 'self' blob:`（Monaco worker）；`img-src`/`media-src`/`frame-src`/`connect-src` 额外允许 `pw-file:`（只读文件协议）。`pw-file://` 对本地 HTML 响应下发沙箱 CSP（含 `worker-src 'none'`），且在主进程 `webRequest.onBeforeRequest` 默认拦截外网请求、按文件弹窗征询用户允许或拒绝。新增资源协议时必须同步改 `CONTENT_SECURITY_POLICY`。

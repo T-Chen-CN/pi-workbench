@@ -51,19 +51,19 @@ macOS 例外是经项目所有者确认的：`.app` 包内不可写、且自动�
 
 | 阶段 | 行为 | 上界 |
 | --- | --- | --- |
-| `before-quit` | 置 `quitting`（关闭按钮不再收托盘）+ 武装「退出卡住」看门狗 | 10 s 后 `app.exit(0)` |
-| `will-quit` | `preventDefault()` → `runShutdownSteps()` 顺序清理 | 6 s 看门狗，超时直接 `app.exit(0)` |
+| `before-quit` | 置 `quitting`（关闭按钮不再收托盘）+ 武装「退出卡住」看门狗（进入 `will-prevent-unload` 未保存弹窗时自动暂停，确认后恢复） | 10 s 后 `app.exit(0)` |
+| `will-quit` | `preventDefault()` → `runShutdownSteps()` 顺序清理 | 7.5 s 看门狗，超时直接 `app.exit(0)` |
 | 清理完成后 | **`app.exit(0)`**，不再二次 `app.quit()` | — |
 
 清理顺序（依赖反序，每步独立超时，超时只记警告并继续）：
-`approval-broker → agents → worktree-deps → workspace-tasks(watchers/repoSync/plugins) → terminals → child-processes → workspace-store → tray`。
+`approval-broker → cloud-device → agents → worktree-deps → workspace-tasks(watchers/repoSync/plugins) → terminals → child-processes → workers → workspace-store → logger-flush → tray`。
 
 - 托盘**最后**销毁：清理变慢时用户还能从托盘重新触发退出，而不是只能开任务管理器。
-- 子进程（PTY shell、`npm install`）登记在 `electron/child-registry.ts`，退出时用 `taskkill /T /F` 收整棵树；
-  故意脱离的（`shell-refresh` 的 `detached` 子进程）不登记。
+- 子进程（PTY shell、`npm install`）登记在 `electron/child-registry.ts`，退出时先杀整棵进程树（Windows `taskkill /T /F` / Unix `-pid` 进程组）再补杀根进程，避免先杀父导致孤儿孙进程逃逸；故意脱离的（`shell-refresh` 的 `detached` 子进程）不登记。
+- `workspace-store.ts` 开启 SQLite `PRAGMA journal_mode = WAL` 与 `busy_timeout`；`logger.ts`（缓冲批写 + 退出 `flush`）与 `draft-store.ts`（`listAsync` / `removeAsync` / `clearAsync`）均为异步 I/O，不阻塞 Electron GUI 主线程；重 CPU 的文档解析与仓库地图扫描走 `worker_threads`（`electron/worker-runner.ts`）。
 - 不要再写成 `will-quit` 里 `preventDefault()` 后 `app.quit()`：那依赖上游事件状态机的二次 quit 行为
   （electron#33643），一旦没生效就是无窗口、无托盘、仍握着单实例锁的僵尸进程。
-- 新增清理步骤 → 必须给 `timeoutMs`，并在 `tests/shutdown.test.ts` 覆盖超时路径。
+- 新增清理步骤 → 必须给 `timeoutMs`，并在 `tests/electron/shutdown.test.ts` 覆盖超时路径。
 
 ## 3. 持久化文件清单
 
