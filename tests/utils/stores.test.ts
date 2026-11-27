@@ -1,9 +1,20 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { editorStoreFor, resetEditorStores, sameOpenFileTabs } from '../../src/store/editorStore'
+import {
+  disposeEditorStore,
+  editorStoreFor,
+  peekEditorStore,
+  resetEditorStores,
+  sameOpenFileTabs,
+} from '../../src/store/editorStore'
 import { useChatStore } from '../../src/store/chatStore'
 import { useToastStore, toast } from '../../src/store/toastStore'
 import { useWorkspaceStore } from '../../src/store/workspaceStore'
-import { diffStoreFor, resetDiffStores } from '../../src/store/diffStore'
+import {
+  diffStoreFor,
+  disposeDiffStore,
+  peekDiffStore,
+  resetDiffStores,
+} from '../../src/store/diffStore'
 import { useSessionStore } from '../../src/store/sessionStore'
 import type { OpenFile } from '../../src/types'
 
@@ -661,5 +672,30 @@ describe('chatStore turn edits', () => {
     expect(
       useChatStore.getState().conversations['edits-key'].messages[0].edits?.map((edit) => edit.path)
     ).toEqual(['F:/work/b.ts'])
+  })
+})
+
+describe('peekEditorStore / peekDiffStore', () => {
+  it('peeks without allocating zombie stores and respects expectedStore on dispose', () => {
+    expect(peekEditorStore('/never-opened')).toBeNull()
+    expect(peekDiffStore('/never-opened')).toBeNull()
+    expect(peekEditorStore(null)).toBeNull()
+    expect(peekDiffStore(undefined)).toBeNull()
+
+    const editor = editorStoreFor('/live-ws')
+    const diff = diffStoreFor('/live-ws')
+    expect(peekEditorStore('/live-ws')).toBe(editor)
+    expect(peekDiffStore('/live-ws')).toBe(diff)
+
+    // Disposing with a mismatched store reference must not evict the live store
+    disposeEditorStore('/live-ws', editorStoreFor('/other-ws'))
+    disposeDiffStore('/live-ws', diffStoreFor('/other-ws'))
+    expect(peekEditorStore('/live-ws')).toBe(editor)
+    expect(peekDiffStore('/live-ws')).toBe(diff)
+
+    disposeEditorStore('/live-ws', editor)
+    disposeDiffStore('/live-ws', diff)
+    expect(peekEditorStore('/live-ws')).toBeNull()
+    expect(peekDiffStore('/live-ws')).toBeNull()
   })
 })

@@ -5,87 +5,59 @@ import {
   Cloud,
   PanelRightClose,
   PanelRightOpen,
-  Pencil,
   PenLine,
-  Pin,
   RefreshCw,
-  Send,
   SlidersHorizontal,
-  Sparkles,
-  Square,
-  Trash2,
   Unplug,
 } from 'lucide-react'
 import {
   CLOUD_ACTIVE_TASK_STATUSES,
   CLOUD_PROVIDER_PRESETS,
   CloudAuthorizationCard,
+  CloudChatComposer,
+  CloudConfigForm,
   CloudConfirmPlanModal,
+  CloudDeviceList,
+  CloudMemoryManager,
   CloudNoticeCard,
   CloudTaskCard,
+  CloudTraceSection,
   CloudUnitCard,
+  TaskResultSection,
   formatCloudTime,
-  formatCloudTokens,
-  parseCloudTagsInput,
 } from '@pi-workbench/cloud-ui'
 import { useCloudStore } from '../../store/cloudStore'
 import { useI18nStore } from '../../store/i18nStore'
 import { toast } from '../../store/toastStore'
 import { confirmDialog } from '../../store/dialogStore'
 import type {
+  CloudChatRow,
   CloudDocItem,
   CloudDreamItem,
   CloudMemoryItem,
-  CloudMemoryKind,
-  CloudTaskStatusName,
 } from '../../types/cloud'
 import type { CloudCatalogModel } from '../../types/electron'
 import { api } from '../../api'
 import { StreamingMarkdown } from '../chat/AgentMarkdown'
-import { CloudTraceSection } from './CloudTraceSection'
-import { TaskResultSection } from './TaskResultSection'
 import { StreamingTranscript, type StreamingTranscriptHandle } from '../ui/StreamingTranscript'
-import { Button, EmptyState, Field, IconButton, Input, Modal, Select, Spinner, Textarea } from '../ui/ui'
-import { Card, CardHeader, SectionHeader, StatusText, Tab } from '../ui/patterns'
+import { Button, EmptyState, Field, IconButton, Input, Modal, Spinner } from '../ui/ui'
+import { SectionHeader, StatusText } from '../ui/patterns'
 
 /**
  * 云端页（F-27 / D-19）：独立视图，与工作区无关，保留顶栏与底部状态栏。
  *
- * 工单 / 工作单元 / 授权 / 提示 / 确认授权弹窗统一复用 `@pi-workbench/cloud-ui`，
- * 桌面端通过 `t(...)` 注入中英文案，与云端 Web 共享同一套状态投影与组件契约。
+ * 工单 / 工作单元 / 设备 / 授权 / 提示 / 确认授权弹窗 / 记忆与留存文档 / 模型配置 / 消息输入区
+ * 统一复用 `@pi-workbench/cloud-ui`，桌面端仅负责接入 store / Electron IPC 与 toast。
  */
 
-const TASK_STATUS_KEY: Partial<Record<CloudTaskStatusName, string>> = {
-  queued: 'cloudTaskQueued',
-  assigned: 'cloudTaskAssigned',
-  running: 'cloudTaskRunning',
-  waiting_human: 'cloudTaskWaiting',
-  done: 'cloudTaskDone',
-  failed: 'cloudTaskFailed',
-  cancelled: 'cloudTaskCancelled',
-  interrupted: 'cloudTaskInterrupted',
-  expired: 'cloudTaskExpired',
-}
-
 const ACTIVE_STATUSES = CLOUD_ACTIVE_TASK_STATUSES
-
-const MEMORY_KIND_KEY: Record<CloudMemoryKind, string> = {
-  fact: 'cloudMemoryKindFact',
-  preference: 'cloudMemoryKindPreference',
-  project: 'cloudMemoryKindProject',
-  decision: 'cloudMemoryKindDecision',
-  todo: 'cloudMemoryKindTodo',
-}
-
 const formatTime = (value?: number) => formatCloudTime(value, false)
-const formatTokens = formatCloudTokens
-const parseTagsInput = parseCloudTagsInput
 
 const CloudMessageItem = React.memo(function CloudMessageItem({
   message,
   language,
 }: {
-  message: import('../../types/cloud').CloudChatRow
+  message: CloudChatRow
   language: 'zh' | 'en'
 }) {
   return (
@@ -178,7 +150,6 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
   const [answerDraft, setAnswerDraft] = useState<Record<string, string>>({})
   const [instructionDraft, setInstructionDraft] = useState<Record<string, string>>({})
   const transcriptHandleRef = useRef<StreamingTranscriptHandle | null>(null)
-  const composingRef = useRef(false)
   const collapseRailRef = useRef<HTMLButtonElement | null>(null)
   const expandRailRef = useRef<HTMLButtonElement | null>(null)
 
@@ -260,13 +231,6 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
     setAsideCollapsed(false)
     window.requestAnimationFrame(() => collapseRailRef.current?.focus())
   }
-
-  const agentStatusText =
-    agentStatus === 'thinking'
-      ? t('cloudAgentThinking')
-      : agentStatus === 'replying'
-        ? t('cloudAgentReplying')
-        : ''
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-surface">
@@ -383,49 +347,17 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
                 )}
               </StreamingTranscript>
 
-              <div className="flex flex-shrink-0 flex-col gap-2 border-t border-rule-divide bg-panel px-4 py-3">
-                <Textarea
-                  value={draft}
-                  onChange={(event) => setDraft(event.target.value)}
-                  placeholder={t('cloudSendPlaceholder')}
-                  rows={3}
-                  onCompositionStart={() => {
-                    composingRef.current = true
-                  }}
-                  onCompositionEnd={() => {
-                    composingRef.current = false
-                  }}
-                  onKeyDown={(event) => {
-                    if (
-                      event.key === 'Enter' &&
-                      !event.shiftKey &&
-                      !composingRef.current &&
-                      !event.nativeEvent.isComposing &&
-                      event.keyCode !== 229
-                    ) {
-                      event.preventDefault()
-                      send()
-                    }
-                  }}
-                />
-                <div className="flex items-center gap-2">
-                  <Button variant="primary" size="sm" onClick={send} disabled={!draft.trim()}>
-                    <Send size={13} />
-                    {t('cloudSend')}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => void stopReply()}
-                    disabled={!canStopReply}
-                  >
-                    <Square size={13} />
-                    {t('cloudStopReply')}
-                  </Button>
-                  <span className="type-caption text-ink-muted">{t('cloudSendShortcutHint')}</span>
-                  <span className="ml-auto type-caption text-ink-muted">{agentStatusText}</span>
-                </div>
-              </div>
+              <CloudChatComposer
+                value={draft}
+                onChange={setDraft}
+                onSend={send}
+                canStopReply={canStopReply}
+                onStopReply={() => void stopReply()}
+                agentStatus={agentStatus}
+                language={language}
+                showIcons
+                stopButtonVariant="ghost"
+              />
             </>
           ) : (
             <PairingPane onBackHome={onBackHome} />
@@ -454,27 +386,12 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
               <CloudTaskCard
                 compact
                 showElapsed
+                language={language}
                 tasks={[...running, ...finished]}
                 devices={devices}
                 stoppingTaskIds={stoppingTaskIds}
                 answerDrafts={answerDraft}
                 instructionDrafts={instructionDraft}
-                labels={{
-                  title: t('cloudTasks'),
-                  empty: t('cloudNoTasks'),
-                  stopping: t('cloudStoppingTask'),
-                  stopTask: t('cloudStopTask'),
-                  offlineCancelled: t('cloudOfflineTaskCancelled'),
-                  questionWaiting: t('cloudQuestionWaiting'),
-                  answerPlaceholder: t('cloudAnswer'),
-                  send: t('cloudSend'),
-                  instructionPlaceholder: t('cloudSendInstructionPlaceholder'),
-                  sendInstruction: t('cloudSendInstruction'),
-                  statusLabel: (status) => {
-                    const key = TASK_STATUS_KEY[status as CloudTaskStatusName]
-                    return key ? t(key as Parameters<typeof t>[0]) : status
-                  },
-                }}
                 onStopTask={(taskId) => void stopTask(taskId)}
                 onSendAnswer={(taskId, text) => {
                   void answerQuestion(taskId, text)
@@ -504,16 +421,7 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
 
               <CloudUnitCard
                 units={units}
-                labels={{
-                  title: t('cloudUnits'),
-                  empty: t('cloudNoUnits'),
-                  active: t('cloudUnitActive'),
-                  closed: t('cloudUnitClosed'),
-                  closing: t('cloudUnitClosing'),
-                  dirty: t('cloudUnitDirty'),
-                  closeAction: t('cloudUnitClose'),
-                  hint: t('cloudUnitHint'),
-                }}
+                language={language}
                 onCloseUnit={(unitId) => {
                   void closeUnit(unitId).then((sent) => {
                     if (sent) toast.success(t('cloudUnitCloseSent'))
@@ -522,38 +430,18 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
                 }}
               />
 
-              <Card density="compact">
-                <CardHeader title={t('cloudDevices')} />
-                {devices.length === 0 ? (
-                  <p className="mt-2 type-caption text-ink-muted">{t('cloudNoWorkspaces')}</p>
-                ) : (
-                  <ul className="mt-2 flex flex-col gap-2">
-                    {devices.map((device) => (
-                      <li key={device.id} className="flex flex-col gap-0.5">
-                        <span className="flex items-center gap-2 type-label text-ink">
-                          <span
-                            className={
-                              device.online
-                                ? 'h-1.5 w-1.5 rounded-full bg-accent'
-                                : 'h-1.5 w-1.5 rounded-full bg-ink-subtle'
-                            }
-                            aria-hidden="true"
-                          />
-                          {device.name}
-                          <span className="type-data text-ink-muted">{device.platform}</span>
-                        </span>
-                        <span className="type-caption text-ink-muted">
-                          {t('cloudWorkspaceCount', { count: device.workspaces.length })}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </Card>
+              <CloudDeviceList
+                devices={devices}
+                language={language}
+                showDetails={false}
+                onlineTone="accent"
+                emptyLabel={t('cloudNoWorkspaces')}
+              />
 
               <CloudAuthorizationCard
                 authorizations={authorizations}
                 showTargets={false}
+                language={language}
                 action={
                   linked ? (
                     <Button variant="secondary" size="sm" onClick={() => setAuthorizeOpen(true)}>
@@ -562,22 +450,11 @@ export const CloudView: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) 
                     </Button>
                   ) : undefined
                 }
-                labels={{
-                  title: t('cloudAuthorizations'),
-                  empty: t('cloudNoAuthorizations'),
-                  quotaText: (used, quota) => t('cloudQuota', { used, quota }),
-                  expiresText: undefined,
-                }}
+                labels={{ expiresText: undefined }}
               />
 
               {notices.length > 0 && (
-                <CloudNoticeCard
-                  notices={notices}
-                  labels={{
-                    title: t('cloudNotices'),
-                    empty: '',
-                  }}
-                />
+                <CloudNoticeCard notices={notices} language={language} labels={{ empty: '' }} />
               )}
             </div>
           </aside>
@@ -669,11 +546,11 @@ const PairingPane: React.FC<{ onBackHome: () => void }> = ({ onBackHome }) => {
 }
 
 /**
- * 云端模型配置弹窗（F-01 / U-04）：对齐 0.11.x 8 家供应商白名单与 Pi catalog。
- * 从右栏收进顶栏弹窗，避免窄窗口下右栏过度拥挤。
+ * 云端模型配置弹窗（F-01 / U-04）：薄包装 `@pi-workbench/cloud-ui` 的 `CloudConfigForm`。
  */
 const CloudConfigModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
   const t = useI18nStore((state) => state.t)
+  const language = useI18nStore((state) => state.language)
   const [providerId, setProviderId] = useState('deepseek')
   const [model, setModel] = useState('')
   const [apiKey, setApiKey] = useState('')
@@ -743,29 +620,6 @@ const CloudConfigModal: React.FC<{ open: boolean; onClose: () => void }> = ({ op
     }
   }, [open, loadCatalog])
 
-  const selectedEntry = useMemo(
-    () => catalog.find((entry) => entry.id === model) ?? null,
-    [catalog, model]
-  )
-
-  const capabilitySummary = useMemo(() => {
-    if (!selectedEntry) return ''
-    const parts: string[] = []
-    if (selectedEntry.contextWindow) {
-      parts.push(`${t('modelContextColumn')} ${formatTokens(selectedEntry.contextWindow)}`)
-    }
-    if (selectedEntry.maxTokens) {
-      parts.push(`${t('modelMaxTokensColumn')} ${formatTokens(selectedEntry.maxTokens)}`)
-    }
-    if (selectedEntry.reasoning !== undefined) {
-      parts.push(selectedEntry.reasoning ? t('providerReasoningYes') : t('providerReasoningNo'))
-    }
-    if (selectedEntry.vision !== undefined) {
-      parts.push(selectedEntry.vision ? t('providerVisionYes') : t('providerVisionNo'))
-    }
-    return parts.join(' · ')
-  }, [selectedEntry, t])
-
   const save = async () => {
     const cleanKey = apiKey.trim()
     if (!providerId.trim() || !model.trim()) return
@@ -833,61 +687,26 @@ const CloudConfigModal: React.FC<{ open: boolean; onClose: () => void }> = ({ op
         </>
       }
     >
-      <div className="flex flex-col gap-3 px-5 py-4">
-        <p className="type-caption text-ink-muted">{t('cloudConfigDesc')}</p>
-        <Field label={t('cloudProvider')} htmlFor="cloud-provider">
-          <Select
-            id="cloud-provider"
-            value={providerId}
-            onChange={(event) => {
-              const next = event.target.value
-              setProviderId(next)
-              setModel('')
-              void loadCatalog(next, '')
-            }}
-          >
-            {CLOUD_PROVIDER_PRESETS.map((preset) => (
-              <option key={preset.id} value={preset.id}>
-                {preset.label}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field
-          label={t('cloudApiKey')}
-          htmlFor="cloud-api-key"
-          hint={mask ? t('cloudApiKeyHint', { mask }) : undefined}
-        >
-          <Input
-            id="cloud-api-key"
-            value={apiKey}
-            onChange={(event) => setApiKey(event.target.value)}
-            type="password"
-            autoComplete="off"
-            placeholder="sk-..."
-          />
-        </Field>
-        <Field
-          label={t('cloudModel')}
-          htmlFor="cloud-model"
-          hint={catalog.length > 0 ? t('cloudModelsHint', { count: catalog.length }) : undefined}
-        >
-          {catalog.length > 0 ? (
-            <Select id="cloud-model" value={model} onChange={(event) => setModel(event.target.value)}>
-              {catalog.map((entry) => (
-                <option key={entry.id} value={entry.id}>
-                  {entry.name ? `${entry.name} (${entry.id})` : entry.id}
-                </option>
-              ))}
-            </Select>
-          ) : (
-            <p className="type-caption text-ink-muted">
-              {fetching ? t('cloudFetchingModels') : t('cloudNoCatalogModels')}
-            </p>
-          )}
-        </Field>
-        {capabilitySummary && <p className="type-caption text-ink-muted">{capabilitySummary}</p>}
-      </div>
+      <CloudConfigForm
+        className="px-5 py-4"
+        idPrefix="cloud"
+        providerId={providerId}
+        model={model}
+        apiKey={apiKey}
+        apiKeyMasked={mask}
+        models={catalog}
+        fetching={fetching}
+        language={language}
+        showMaskedKeyInHint
+        showModelIdInOption
+        onProviderChange={(next) => {
+          setProviderId(next)
+          setModel('')
+          void loadCatalog(next, '')
+        }}
+        onModelChange={setModel}
+        onApiKeyChange={setApiKey}
+      />
     </Modal>
   )
 }
@@ -898,6 +717,7 @@ const CloudConfigModal: React.FC<{ open: boolean; onClose: () => void }> = ({ op
  */
 const AuthorizeDialog: React.FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
   const t = useI18nStore((state) => state.t)
+  const language = useI18nStore((state) => state.language)
   const devices = useCloudStore((state) => state.devices)
   const confirmPlan = useCloudStore((state) => state.confirmPlan)
 
@@ -905,19 +725,11 @@ const AuthorizeDialog: React.FC<{ open: boolean; onClose: () => void }> = ({ ope
     <CloudConfirmPlanModal
       open={open}
       devices={devices}
+      language={language}
       onClose={onClose}
       labels={{
         title: t('cloudAuthorizeTitle'),
-        close: t('close'),
-        cancel: t('cancel'),
         confirm: t('cloudAuthorizeAction'),
-        hint: t('cloudAuthorizeHint'),
-        planLabel: t('cloudPlanText'),
-        planPlaceholder: t('cloudPlanTextPlaceholder'),
-        deviceLabel: t('cloudAuthorizeDevice'),
-        repoLabel: t('cloudAuthorizeRepo'),
-        noGitRepo: t('cloudNoGitRepo'),
-        quotaLabel: t('cloudQuotaLabel'),
       }}
       onSubmit={async (payload) => {
         const ok = await confirmPlan(payload)
@@ -933,26 +745,17 @@ const AuthorizeDialog: React.FC<{ open: boolean; onClose: () => void }> = ({ ope
 }
 
 /**
- * 云端记忆、留存文档（AGENTS.md / SOUL.md）与梦境整理弹窗（F-39 / F-41 / C-03a）。
- * 所有云端落盘文件透明可见、可编辑，手工记忆永不被自动抽取或梦境覆盖。
+ * 云端记忆、留存文档（AGENTS.md / SOUL.md）与梦境整理弹窗（F-39 / F-41 / C-03a）：
+ * 薄包装 `@pi-workbench/cloud-ui` 的 `CloudMemoryManager`，接入桌面 IPC 与 toast。
  */
 const CloudMemoryModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
   const t = useI18nStore((state) => state.t)
-  const [tab, setTab] = useState<'memories' | 'docs' | 'dreams'>('memories')
+  const language = useI18nStore((state) => state.language)
   const [loading, setLoading] = useState(false)
   const [memories, setMemories] = useState<CloudMemoryItem[]>([])
   const [docs, setDocs] = useState<CloudDocItem[]>([])
   const [dreams, setDreams] = useState<CloudDreamItem[]>([])
-  const [kind, setKind] = useState<CloudMemoryKind>('fact')
-  const [content, setContent] = useState('')
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [editKind, setEditKind] = useState<CloudMemoryKind>('fact')
-  const [editContent, setEditContent] = useState('')
-  const [editTags, setEditTags] = useState('')
-  const [selectedDoc, setSelectedDoc] = useState<'AGENTS.md' | 'SOUL.md'>('AGENTS.md')
-  // docDrafts 仅存用户动手改过的脏草稿；未修改文档刷新时直接读服务端最新内容
   const [docDrafts, setDocDrafts] = useState<Record<string, string>>({})
-  const [busy, setBusy] = useState(false)
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -972,402 +775,91 @@ const CloudMemoryModal: React.FC<{ open: boolean; onClose: () => void }> = ({ op
 
   useEffect(() => {
     if (open) void refresh()
-    else setEditingId(null)
   }, [open, refresh])
-
-  const addMemory = async () => {
-    if (busy) return
-    const trimmed = content.trim()
-    if (!trimmed) return
-    setBusy(true)
-    try {
-      const res = await api.cloudAddMemory({ kind, content: trimmed })
-      if (res.success && res.memory) {
-        setMemories((prev) => [res.memory!, ...prev])
-        setContent('')
-        toast.success(t('cloudSaved'))
-      } else {
-        toast.error(res.error ?? t('unknownError'))
-      }
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const startEdit = (item: CloudMemoryItem) => {
-    setEditingId(item.id)
-    setEditKind(item.kind)
-    setEditContent(item.content)
-    setEditTags((item.tags ?? []).join(', '))
-  }
-
-  const saveEdit = async () => {
-    if (!editingId || busy) return
-    const trimmed = editContent.trim()
-    if (!trimmed) return
-    setBusy(true)
-    try {
-      const res = await api.cloudUpdateMemory({
-        id: editingId,
-        kind: editKind,
-        content: trimmed,
-        tags: parseTagsInput(editTags),
-      })
-      if (res.success && res.memory) {
-        setMemories((prev) => prev.map((entry) => (entry.id === editingId ? res.memory! : entry)))
-        setEditingId(null)
-        toast.success(t('cloudMemoryEditHint'))
-      } else if (res.error) {
-        toast.error(res.error)
-      }
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const togglePin = async (item: CloudMemoryItem) => {
-    const res = await api.cloudUpdateMemory({ id: item.id, pinned: !item.pinned })
-    if (res.success && res.memory) {
-      setMemories((prev) => prev.map((entry) => (entry.id === item.id ? res.memory! : entry)))
-    } else if (res.error) {
-      toast.error(res.error)
-    }
-  }
-
-  const removeMemory = async (id: string) => {
-    const res = await api.cloudDeleteMemory(id)
-    if (res.success) {
-      if (editingId === id) setEditingId(null)
-      setMemories((prev) => prev.filter((entry) => entry.id !== id))
-    } else if (res.error) {
-      toast.error(res.error)
-    }
-  }
-
-  const saveDoc = async () => {
-    if (busy) return
-    setBusy(true)
-    try {
-      const current = docs.find((d) => d.name === selectedDoc)
-      const nextContent =
-        selectedDoc in docDrafts ? docDrafts[selectedDoc] : (current?.content ?? '')
-      const res = await api.cloudSaveDoc({
-        name: selectedDoc,
-        content: nextContent,
-      })
-      if (res.success && res.doc) {
-        const saved = res.doc
-        setDocs((prev) =>
-          prev.some((d) => d.name === saved.name)
-            ? prev.map((d) => (d.name === saved.name ? saved : d))
-            : [...prev, saved]
-        )
-        setDocDrafts((prev) => {
-          const next = { ...prev }
-          delete next[saved.name]
-          return next
-        })
-        toast.success(t('cloudDocSaved'))
-      } else {
-        toast.error(res.error ?? t('unknownError'))
-      }
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const runDream = async () => {
-    if (busy) return
-    setBusy(true)
-    try {
-      const res = await api.cloudRunDream()
-      if (res.success) {
-        await refresh()
-        toast.success(res.dream?.summary || t('cloudSaved'))
-      } else {
-        toast.error(res.error ?? t('unknownError'))
-      }
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const currentDoc = docs.find((d) => d.name === selectedDoc)
-  const currentDocValue =
-    selectedDoc in docDrafts ? docDrafts[selectedDoc] : (currentDoc?.content ?? '')
-  const memorySourceLabel = (source: CloudMemoryItem['source']) =>
-    source === 'manual'
-      ? t('cloudMemorySourceManual')
-      : source === 'dream'
-        ? t('cloudMemorySourceDream')
-        : t('cloudMemorySourceAuto')
 
   return (
     <Modal open={open} onClose={onClose} title={t('cloudMemorySection')} size="lg" closeLabel={t('close')}>
-      <div className="flex flex-col gap-3 px-5 py-4">
-        <div className="flex items-center gap-2 border-b border-rule-divide">
-          <div role="tablist" aria-label={t('cloudMemorySection')} className="flex items-center gap-1">
-            <Tab
-              size="sm"
-              active={tab === 'memories'}
-              label={`${t('cloudMemoryItemsTab')} (${memories.length})`}
-              onSelect={() => setTab('memories')}
-            />
-            <Tab
-              size="sm"
-              active={tab === 'docs'}
-              label={t('cloudMemoryDocsTab')}
-              onSelect={() => setTab('docs')}
-            />
-            <Tab
-              size="sm"
-              active={tab === 'dreams'}
-              label={`${t('cloudMemoryDreamsTab')} (${dreams.length})`}
-              onSelect={() => setTab('dreams')}
-            />
-          </div>
-          <div className="ml-auto pb-1">
-            <Button variant="ghost" size="sm" onClick={() => void refresh()} disabled={loading}>
-              {loading ? <Spinner size={13} /> : <RefreshCw size={13} />}
-              {t('cloudRefresh')}
-            </Button>
-          </div>
-        </div>
-
-        {tab === 'memories' && (
-          <div className="flex flex-col gap-3">
-            <div className="flex items-center gap-2">
-              <div className="w-28 flex-shrink-0">
-                <Select
-                  value={kind}
-                  onChange={(event) => setKind(event.target.value as CloudMemoryKind)}
-                >
-                  {(['fact', 'preference', 'project', 'decision', 'todo'] as const).map((value) => (
-                    <option key={value} value={value}>
-                      {t(MEMORY_KIND_KEY[value] as Parameters<typeof t>[0])}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-              <Input
-                value={content}
-                onChange={(event) => setContent(event.target.value)}
-                placeholder={t('cloudMemoryAddPlaceholder')}
-                onKeyDown={(event) => {
-                  if (
-                    event.key === 'Enter' &&
-                    !event.nativeEvent.isComposing &&
-                    event.keyCode !== 229 &&
-                    !busy &&
-                    content.trim()
-                  ) {
-                    event.preventDefault()
-                    void addMemory()
-                  }
-                }}
-              />
-              <Button
-                variant="primary"
-                size="sm"
-                className="flex-shrink-0"
-                onClick={() => void addMemory()}
-                disabled={busy || !content.trim()}
-              >
-                {t('cloudMemoryAdd')}
-              </Button>
-            </div>
-            {memories.length === 0 ? (
-              <p className="type-caption text-ink-muted">{t('cloudMemoryEmpty')}</p>
-            ) : (
-              <ul className="flex max-h-80 flex-col gap-2 overflow-y-auto">
-                {memories.map((item) => (
-                  <li
-                    key={item.id}
-                    className="flex flex-col gap-1.5 rounded border border-rule-divide bg-panel px-3 py-2"
-                  >
-                    {editingId === item.id ? (
-                      <div className="flex flex-col gap-2">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="type-caption text-ink-muted">
-                            {t('cloudMemoryEditHint')}
-                          </span>
-                          <div className="w-28 flex-shrink-0">
-                            <Select
-                              value={editKind}
-                              onChange={(event) => setEditKind(event.target.value as CloudMemoryKind)}
-                            >
-                              {(['fact', 'preference', 'project', 'decision', 'todo'] as const).map(
-                                (value) => (
-                                  <option key={value} value={value}>
-                                    {t(MEMORY_KIND_KEY[value] as Parameters<typeof t>[0])}
-                                  </option>
-                                )
-                              )}
-                            </Select>
-                          </div>
-                        </div>
-                        <Textarea
-                          rows={3}
-                          value={editContent}
-                          onChange={(event) => setEditContent(event.target.value)}
-                        />
-                        <Input
-                          value={editTags}
-                          onChange={(event) => setEditTags(event.target.value)}
-                          placeholder={t('cloudMemoryTagsPlaceholder')}
-                        />
-                        <div className="flex items-center gap-2">
-                          <Button
-                            variant="primary"
-                            size="sm"
-                            onClick={() => void saveEdit()}
-                            disabled={busy || !editContent.trim()}
-                          >
-                            {t('cloudSave')}
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setEditingId(null)}
-                            disabled={busy}
-                          >
-                            {t('cancel')}
-                          </Button>
-                        </div>
-                      </div>
-                    ) : (
-                      <>
-                        <div className="flex items-center gap-2">
-                          <span className="type-caption text-ink-muted">
-                            {t(MEMORY_KIND_KEY[item.kind] as Parameters<typeof t>[0])} ·{' '}
-                            {memorySourceLabel(item.source)}
-                          </span>
-                          <div className="ml-auto flex items-center gap-1">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => startEdit(item)}
-                              title={t('cloudMemoryEdit')}
-                              aria-label={t('cloudMemoryEdit')}
-                            >
-                              <Pencil size={12} />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => void togglePin(item)}
-                              title={item.pinned ? t('cloudMemoryUnpin') : t('cloudMemoryPin')}
-                              aria-label={item.pinned ? t('cloudMemoryUnpin') : t('cloudMemoryPin')}
-                            >
-                              <Pin size={12} className={item.pinned ? 'text-accent' : undefined} />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => void removeMemory(item.id)}
-                              title={t('delete')}
-                              aria-label={t('delete')}
-                            >
-                              <Trash2 size={12} />
-                            </Button>
-                          </div>
-                        </div>
-                        <p className="type-body text-ink">{item.content}</p>
-                        {item.tags && item.tags.length > 0 && (
-                          <div className="flex flex-wrap gap-1.5">
-                            {item.tags.map((tag) => (
-                              <span
-                                key={tag}
-                                className="rounded border border-rule-divide bg-sunken px-1.5 py-0.5 type-caption text-ink-muted"
-                              >
-                                {tag}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                      </>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
-
-        {tab === 'docs' && (
-          <div className="flex flex-col gap-3">
-            <div className="flex items-center gap-2">
-              {(['AGENTS.md', 'SOUL.md'] as const).map((name) => (
-                <Button
-                  key={name}
-                  variant={selectedDoc === name ? 'primary' : 'secondary'}
-                  size="sm"
-                  onClick={() => setSelectedDoc(name)}
-                >
-                  {name}
-                </Button>
-              ))}
-              <span className="ml-auto type-caption text-ink-muted">
-                {currentDoc?.updatedAt
-                  ? new Date(currentDoc.updatedAt).toLocaleString()
-                  : t('cloudDocUnsaved')}
-              </span>
-            </div>
-            <Textarea
-              rows={12}
-              value={currentDocValue}
-              onChange={(event) =>
-                setDocDrafts((prev) => ({ ...prev, [selectedDoc]: event.target.value }))
-              }
-              placeholder={t('cloudDocPlaceholder')}
-            />
-            <div className="flex justify-end">
-              <Button variant="primary" size="sm" onClick={() => void saveDoc()} disabled={busy}>
-                {busy ? <Spinner size={13} /> : null}
-                {t('cloudDocSave')}
-              </Button>
-            </div>
-          </div>
-        )}
-
-        {tab === 'dreams' && (
-          <div className="flex flex-col gap-3">
-            <div className="flex items-center justify-between">
-              <span className="type-caption text-ink-muted">
-                {dreams.length === 0 ? t('cloudDreamsEmpty') : ''}
-              </span>
-              <Button variant="secondary" size="sm" onClick={() => void runDream()} disabled={busy}>
-                {busy ? <Spinner size={13} /> : <Sparkles size={13} />}
-                {t('cloudMemoryRunDream')}
-              </Button>
-            </div>
-            {dreams.length > 0 && (
-              <ul className="flex max-h-80 flex-col gap-2 overflow-y-auto">
-                {dreams.map((dream) => (
-                  <li
-                    key={dream.id}
-                    className="flex flex-col gap-1 rounded border border-rule-divide bg-panel px-3 py-2"
-                  >
-                    <div className="flex items-center gap-2 type-caption text-ink-muted">
-                      <span className="type-data">{new Date(dream.at).toLocaleString()}</span>
-                      <span>
-                        ·{' '}
-                        {dream.trigger === 'manual'
-                          ? t('cloudDreamTriggerManual')
-                          : t('cloudDreamTriggerIdle')}
-                      </span>
-                      <span className="ml-auto type-data">
-                        +{dream.added} / -{dream.removed}
-                      </span>
-                    </div>
-                    <p className="type-body text-ink">{dream.summary}</p>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
-      </div>
+      {open && (
+        <CloudMemoryManager
+          memories={memories}
+          docs={docs}
+          dreams={dreams}
+          docDrafts={docDrafts}
+          loading={loading}
+          language={language}
+          layout="tabs"
+          confirmDelete={false}
+          showKindFilter
+          onDocDraftChange={(name, value) =>
+            setDocDrafts((prev) => ({ ...prev, [name]: value }))
+          }
+          onRefresh={refresh}
+          onAddMemory={async ({ kind, content }) => {
+            const res = await api.cloudAddMemory({ kind, content })
+            if (res.success && res.memory) {
+              setMemories((prev) => [res.memory!, ...prev])
+              toast.success(t('cloudSaved'))
+              return { ok: true }
+            }
+            const err = res.error ?? t('unknownError')
+            toast.error(err)
+            return { ok: false, error: err }
+          }}
+          onUpdateMemory={async (payload) => {
+            const res = await api.cloudUpdateMemory(payload)
+            if (res.success && res.memory) {
+              setMemories((prev) =>
+                prev.map((entry) => (entry.id === payload.id ? res.memory! : entry))
+              )
+              if (payload.content !== undefined) toast.success(t('cloudMemoryEditHint'))
+              return { ok: true }
+            }
+            if (res.error) toast.error(res.error)
+            return { ok: false, error: res.error }
+          }}
+          onDeleteMemory={async (id) => {
+            const res = await api.cloudDeleteMemory(id)
+            if (res.success) {
+              setMemories((prev) => prev.filter((entry) => entry.id !== id))
+              return { ok: true }
+            }
+            if (res.error) toast.error(res.error)
+            return { ok: false, error: res.error }
+          }}
+          onSaveDoc={async ({ name, content }) => {
+            const res = await api.cloudSaveDoc({ name, content })
+            if (res.success && res.doc) {
+              const saved = res.doc
+              setDocs((prev) =>
+                prev.some((d) => d.name === saved.name)
+                  ? prev.map((d) => (d.name === saved.name ? saved : d))
+                  : [...prev, saved]
+              )
+              setDocDrafts((prev) => {
+                const next = { ...prev }
+                delete next[saved.name]
+                return next
+              })
+              toast.success(t('cloudDocSaved'))
+              return { ok: true }
+            }
+            const err = res.error ?? t('unknownError')
+            toast.error(err)
+            return { ok: false, error: err }
+          }}
+          onRunDream={async () => {
+            const res = await api.cloudRunDream()
+            if (res.success) {
+              await refresh()
+              toast.success(res.dream?.summary || t('cloudSaved'))
+              return { ok: true, summary: res.dream?.summary }
+            }
+            const err = res.error ?? t('unknownError')
+            toast.error(err)
+            return { ok: false, error: err }
+          }}
+        />
+      )}
     </Modal>
   )
 }

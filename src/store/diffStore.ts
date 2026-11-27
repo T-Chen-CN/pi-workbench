@@ -1,5 +1,5 @@
-import { useStore } from 'zustand'
 import { createStore, type StoreApi } from 'zustand/vanilla'
+import { useStoreWithComparator } from './useStoreWithComparator'
 import { mergeFileEdits } from '../api/diff'
 import type { FileEdit } from '../types/electron'
 
@@ -56,6 +56,22 @@ export function createDiffStore(): StoreApi<DiffState> {
 const stores = new Map<string, StoreApi<DiffState>>()
 const EMPTY_STORE = createDiffStore()
 
+/** 只读查询某个工作区的 Diff store；未挂载或已关闭时返回 null，绝不分配僵尸 store */
+export function peekDiffStore(
+  workspacePath: string | null | undefined
+): StoreApi<DiffState> | null {
+  if (!workspacePath) return null
+  return stores.get(workspacePath) ?? null
+}
+
+/** 将既有 store 重新登记到注册表（供 WorkspaceStoresProvider 在 StrictMode 挂载期复用） */
+export function attachDiffStore(workspacePath: string, store: StoreApi<DiffState>): void {
+  if (!workspacePath) return
+  if (!stores.has(workspacePath)) {
+    stores.set(workspacePath, store)
+  }
+}
+
 export function diffStoreFor(workspacePath: string | null | undefined): StoreApi<DiffState> {
   if (!workspacePath) return EMPTY_STORE
   let store = stores.get(workspacePath)
@@ -66,7 +82,11 @@ export function diffStoreFor(workspacePath: string | null | undefined): StoreApi
   return store
 }
 
-export function disposeDiffStore(workspacePath: string): void {
+export function disposeDiffStore(
+  workspacePath: string,
+  expectedStore?: StoreApi<DiffState>
+): void {
+  if (expectedStore && stores.get(workspacePath) !== expectedStore) return
   stores.delete(workspacePath)
 }
 
@@ -78,12 +98,14 @@ export function resetDiffStores(): void {
 export function useDiffStore(workspacePath: string | null | undefined): DiffState
 export function useDiffStore<T>(
   workspacePath: string | null | undefined,
-  selector: (state: DiffState) => T
+  selector: (state: DiffState) => T,
+  isEqual?: (a: T, b: T) => boolean
 ): T
 export function useDiffStore<T>(
   workspacePath: string | null | undefined,
-  selector?: (state: DiffState) => T
+  selector?: (state: DiffState) => T,
+  isEqual?: (a: T, b: T) => boolean
 ): DiffState | T {
   const store = diffStoreFor(workspacePath)
-  return useStore(store, selector ?? ((state) => state as unknown as T))
+  return useStoreWithComparator(store, selector, isEqual)
 }

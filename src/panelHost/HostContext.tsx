@@ -7,6 +7,7 @@
  */
 
 import React, { createContext, useContext, useEffect } from 'react'
+import { HostDocumentProvider } from '@pi-workbench/ui'
 import { usePanelStore } from '../store/panelStore'
 import { isWindowClosed } from './auxWindow'
 import { MAIN_HOST } from './types'
@@ -17,7 +18,19 @@ const HostContext = createContext<HostId>(MAIN_HOST)
 export const HostProvider: React.FC<{ host: HostId; children: React.ReactNode }> = ({
   host,
   children,
-}) => <HostContext.Provider value={host}>{children}</HostContext.Provider>
+}) => {
+  const win = usePanelStore((state) =>
+    host === MAIN_HOST ? null : (state.windows[host]?.handle?.window ?? null)
+  )
+  const hostWindow = isWindowClosed(win) ? window : (win as Window)
+  const hostDocument = hostWindow.document ?? document
+
+  return (
+    <HostContext.Provider value={host}>
+      <HostDocumentProvider value={hostDocument}>{children}</HostDocumentProvider>
+    </HostContext.Provider>
+  )
+}
 
 export function useHostId(): HostId {
   return useContext(HostContext)
@@ -26,7 +39,9 @@ export function useHostId(): HostId {
 /** 宿主窗口的 window；辅助窗口已关闭时回落到主窗口 */
 export function useHostWindow(): Window {
   const host = useHostId()
-  const win = usePanelStore((state) => (host === MAIN_HOST ? null : state.windows[host]?.handle?.window ?? null))
+  const win = usePanelStore((state) =>
+    host === MAIN_HOST ? null : (state.windows[host]?.handle?.window ?? null)
+  )
   // 关窗到 IPC 抵达之间不足一帧，但 store 里那条句柄还在：
   // 已关闭的 WindowProxy 上 `document` 可能取不到，必须在读之前就回落。
   if (isWindowClosed(win)) return window

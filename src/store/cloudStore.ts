@@ -340,11 +340,17 @@ export const useCloudStore = create<CloudState>((set, get) => ({
   applyClientState: (state) => set({ clientState: state }),
 }))
 
+const runningTasksCache = new WeakMap<CloudTaskRow[], CloudTaskRow[]>()
+
 export function selectRunningTasks(state: CloudState): CloudTaskRow[] {
-  return state.tasks.filter(
+  const cached = runningTasksCache.get(state.tasks)
+  if (cached) return cached
+  const running = state.tasks.filter(
     (task) =>
       task.status === 'assigned' || task.status === 'running' || task.status === 'waiting_human'
   )
+  runningTasksCache.set(state.tasks, running)
+  return running
 }
 
 export type {

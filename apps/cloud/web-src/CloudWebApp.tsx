@@ -1,31 +1,34 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Cloud, PanelRightClose, PanelRightOpen, X } from 'lucide-react'
+import { translate, type Language, type TranslationKey, type TranslationParams } from '@pi-workbench/i18n'
+import {
+  BrandSeal,
+  StreamdownView,
+  StreamingTranscript,
+  type StreamingTranscriptHandle,
+} from '@pi-workbench/ui'
 import {
   Button,
   Caption,
+  CloudChatComposer,
+  CloudTraceSection,
   DataText,
   EmptyState,
   Field,
   Input,
   StatusText,
   Tab,
-  Textarea,
 } from '@pi-workbench/cloud-ui'
-import { BrandSeal } from '../../../src/components/ui/BrandSeal'
-import { CloudTraceSection } from '../../../src/components/cloud/CloudTraceSection'
-import { StreamdownView } from '../../../src/components/ui/StreamdownView'
-import {
-  StreamingTranscript,
-  type StreamingTranscriptHandle,
-} from '../../../src/components/ui/StreamingTranscript'
 import {
   ACTIVE_TASK_STATUSES,
-  AGENT_STATUS_LABELS,
   INITIAL_WEB_SESSION_STATE,
   apiRequest,
+  applyLanguage,
   applyTheme,
   applyWebFrame,
   formatTime,
+  getAgentStatusLabel,
+  resolveInitialLanguage,
   resolveInitialTheme,
   type CloudChatRow,
   type CloudDocItem,
@@ -59,18 +62,20 @@ const FALLBACK_WEB_VERSION =
     ? __PI_CLOUD_WEB_VERSION__
     : '0.11.2'
 
-const TABS: ReadonlyArray<{ id: WebTab; label: string }> = [
-  { id: 'chat', label: '会话' },
-  { id: 'tasks', label: '工单' },
-  { id: 'devices', label: '设备' },
-  { id: 'memory', label: '记忆' },
-  { id: 'settings', label: '设置' },
+const TAB_KEYS: ReadonlyArray<{ id: WebTab; labelKey: TranslationKey }> = [
+  { id: 'chat', labelKey: 'cloudWebTabChat' },
+  { id: 'tasks', labelKey: 'cloudWebTabTasks' },
+  { id: 'devices', labelKey: 'cloudWebTabDevices' },
+  { id: 'memory', labelKey: 'cloudWebTabMemory' },
+  { id: 'settings', labelKey: 'cloudWebTabSettings' },
 ]
 
 const WebChatMessageRow = React.memo(function WebChatMessageRow({
   message,
+  language,
 }: {
   message: CloudChatRow
+  language: Language
 }) {
   const isUser = message.role === 'user'
   return (
@@ -86,7 +91,7 @@ const WebChatMessageRow = React.memo(function WebChatMessageRow({
         <span className="type-data">{formatTime(message.at)}</span>
         {message.streaming && (
           <span
-            aria-label="输出中"
+            aria-label={translate(language, 'cloudWebStreamingAria')}
             className="msg-streaming h-1.5 w-1.5 animate-pulse rounded-full bg-accent"
           />
         )}
@@ -100,7 +105,7 @@ const WebChatMessageRow = React.memo(function WebChatMessageRow({
           traces={message.traces}
           isStreaming={Boolean(message.streaming)}
           hasBodyText={Boolean(message.text.trim())}
-          language="zh"
+          language={language}
         />
       )}
       {message.text &&
@@ -113,7 +118,7 @@ const WebChatMessageRow = React.memo(function WebChatMessageRow({
               isStreaming={Boolean(message.streaming)}
               showCursor={Boolean(message.streaming)}
               highlight={message.text.length <= 20_000}
-              language="zh"
+              language={language}
             />
           </div>
         ))}
@@ -123,9 +128,19 @@ const WebChatMessageRow = React.memo(function WebChatMessageRow({
 })
 
 const SetupView: React.FC<{
+  language: Language
+  onToggleLanguage: () => void
   onDone: () => void
-  request: <T = any>(method: string, path: string, body?: unknown) => Promise<{ ok: boolean; status: number; payload: T | null }>
-}> = ({ onDone, request }) => {
+  request: <T = any>(
+    method: string,
+    path: string,
+    body?: unknown
+  ) => Promise<{ ok: boolean; status: number; payload: T | null }>
+}> = ({ language, onToggleLanguage, onDone, request }) => {
+  const t = useCallback(
+    (key: TranslationKey, params?: TranslationParams) => translate(language, key, params),
+    [language]
+  )
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [error, setError] = useState('')
@@ -134,11 +149,11 @@ const SetupView: React.FC<{
   const submit = async () => {
     if (busy) return
     if (password.length < 8) {
-      setError('密码至少 8 位')
+      setError(t('cloudWebPasswordTooShort'))
       return
     }
     if (password !== confirm) {
-      setError('两次输入的密码不一致')
+      setError(t('cloudWebPasswordMismatch'))
       return
     }
     setBusy(true)
@@ -146,7 +161,7 @@ const SetupView: React.FC<{
     try {
       const result = await request<{ error?: string }>('POST', '/v1/setup', { password })
       if (!result.ok) {
-        setError(result.payload?.error || '创建失败')
+        setError(result.payload?.error || t('cloudWebSetupFailed'))
         return
       }
       onDone()
@@ -161,29 +176,42 @@ const SetupView: React.FC<{
         <div className="flex w-full flex-col gap-4 border border-line bg-raised p-6 shadow-print">
           <div className="flex items-center gap-2.5">
             <BrandSeal size={24} className="brand-seal" />
-            <h1 className="m-0 type-subtitle text-ink">Pi Cloud</h1>
+            <h1 className="m-0 type-subtitle text-ink">{t('cloudWebTitle')}</h1>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="ml-auto"
+              onClick={onToggleLanguage}
+              aria-label={t('cloudWebLanguageToggle')}
+            >
+              {language === 'zh' ? t('cloudWebLanguageZh') : t('cloudWebLanguageEn')}
+            </Button>
           </div>
-          <Caption className="text-ink-muted">首次使用：创建唯一的管理员账号。</Caption>
-          <Field label="密码" htmlFor="setup-password">
+          <Caption className="text-ink-muted">{t('cloudWebSetupHint')}</Caption>
+          <Field label={t('cloudWebPassword')} htmlFor="setup-password">
             <Input
               id="setup-password"
               type="password"
               autoComplete="new-password"
-              placeholder="至少 8 位"
+              placeholder={t('cloudWebPasswordPlaceholder')}
               value={password}
               onChange={(event) => setPassword(event.target.value)}
             />
           </Field>
-          <Field label="确认密码" htmlFor="setup-confirm">
+          <Field label={t('cloudWebConfirmPassword')} htmlFor="setup-confirm">
             <Input
               id="setup-confirm"
               type="password"
               autoComplete="new-password"
-              placeholder="再输入一次"
+              placeholder={t('cloudWebConfirmPasswordPlaceholder')}
               value={confirm}
               onChange={(event) => setConfirm(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.nativeEvent.isComposing && event.keyCode !== 229) {
+                if (
+                  event.key === 'Enter' &&
+                  !event.nativeEvent.isComposing &&
+                  event.keyCode !== 229
+                ) {
                   void submit()
                 }
               }}
@@ -191,7 +219,7 @@ const SetupView: React.FC<{
           </Field>
           {error && <Caption className="text-danger">{error}</Caption>}
           <Button variant="primary" size="md" disabled={busy} onClick={() => void submit()}>
-            创建管理员账号
+            {t('cloudWebSetupSubmit')}
           </Button>
         </div>
       </div>
@@ -200,10 +228,20 @@ const SetupView: React.FC<{
 }
 
 const LoginView: React.FC<{
+  language: Language
+  onToggleLanguage: () => void
   notice: string
   onLoggedIn: (me: WebMe) => void
-  request: <T = any>(method: string, path: string, body?: unknown) => Promise<{ ok: boolean; status: number; payload: T | null }>
-}> = ({ notice, onLoggedIn, request }) => {
+  request: <T = any>(
+    method: string,
+    path: string,
+    body?: unknown
+  ) => Promise<{ ok: boolean; status: number; payload: T | null }>
+}> = ({ language, onToggleLanguage, notice, onLoggedIn, request }) => {
+  const t = useCallback(
+    (key: TranslationKey, params?: TranslationParams) => translate(language, key, params),
+    [language]
+  )
   const [password, setPassword] = useState('')
   const [error, setError] = useState(notice)
   const [busy, setBusy] = useState(false)
@@ -219,7 +257,7 @@ const LoginView: React.FC<{
     try {
       const result = await request('POST', '/v1/login', { password })
       if (!result.ok) {
-        setError(result.status === 429 ? '尝试过于频繁，稍后再试' : '密码不正确')
+        setError(result.status === 429 ? t('cloudWebLoginRateLimited') : t('cloudWebLoginInvalid'))
         return
       }
       const me = await request<WebMe>('GET', '/v1/me')
@@ -237,10 +275,19 @@ const LoginView: React.FC<{
         <div className="flex w-full flex-col gap-4 border border-line bg-raised p-6 shadow-print">
           <div className="flex items-center gap-2.5">
             <BrandSeal size={24} className="brand-seal" />
-            <h1 className="m-0 type-subtitle text-ink">Pi Cloud</h1>
+            <h1 className="m-0 type-subtitle text-ink">{t('cloudWebTitle')}</h1>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="ml-auto"
+              onClick={onToggleLanguage}
+              aria-label={t('cloudWebLanguageToggle')}
+            >
+              {language === 'zh' ? t('cloudWebLanguageZh') : t('cloudWebLanguageEn')}
+            </Button>
           </div>
-          <Caption className="text-ink-muted">登录云端控制台。</Caption>
-          <Field label="密码" htmlFor="login-password">
+          <Caption className="text-ink-muted">{t('cloudWebLoginHint')}</Caption>
+          <Field label={t('cloudWebPassword')} htmlFor="login-password">
             <Input
               id="login-password"
               type="password"
@@ -248,7 +295,11 @@ const LoginView: React.FC<{
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.nativeEvent.isComposing && event.keyCode !== 229) {
+                if (
+                  event.key === 'Enter' &&
+                  !event.nativeEvent.isComposing &&
+                  event.keyCode !== 229
+                ) {
                   void submit()
                 }
               }}
@@ -257,7 +308,7 @@ const LoginView: React.FC<{
           </Field>
           {error && <Caption className="text-danger">{error}</Caption>}
           <Button variant="primary" size="md" disabled={busy} onClick={() => void submit()}>
-            登录
+            {t('cloudWebLoginSubmit')}
           </Button>
         </div>
       </div>
@@ -268,8 +319,9 @@ const LoginView: React.FC<{
 export const CloudWebApp: React.FC = () => {
   const [view, setView] = useState<'loading' | 'setup' | 'login' | 'app'>('loading')
   const [me, setMe] = useState<WebMe | null>(null)
-  const [loginNotice, setLoginNotice] = useState('')
+  const [loginNoticeKey, setLoginNoticeKey] = useState<TranslationKey | null>(null)
   const [theme, setTheme] = useState<WebTheme>(() => resolveInitialTheme())
+  const [language, setLanguage] = useState<Language>(() => resolveInitialLanguage())
 
   const [tab, setTab] = useState<WebTab>('chat')
   const [asideCollapsed, setAsideCollapsed] = useState(false)
@@ -305,7 +357,7 @@ export const CloudWebApp: React.FC = () => {
   const unreadRef = useRef(0)
   const tabRef = useRef<WebTab>(tab)
   const authenticatedRef = useRef(false)
-  const composingRef = useRef(false)
+  const languageRef = useRef<Language>(language)
   const transcriptRef = useRef<StreamingTranscriptHandle | null>(null)
   const collapseAsideRef = useRef<HTMLButtonElement | null>(null)
   const expandAsideRef = useRef<HTMLButtonElement | null>(null)
@@ -314,6 +366,12 @@ export const CloudWebApp: React.FC = () => {
   lastSeqRef.current = session.lastSeq
   unreadRef.current = session.unreadCount
   authenticatedRef.current = view === 'app'
+  languageRef.current = language
+
+  const t = useCallback(
+    (key: TranslationKey, params?: TranslationParams) => translate(language, key, params),
+    [language]
+  )
 
   const clearReconnectTimer = useCallback(() => {
     if (reconnectTimerRef.current !== null) {
@@ -341,7 +399,7 @@ export const CloudWebApp: React.FC = () => {
       closeSocket()
       setConfirmPlanOpen(false)
       setMe(nextMe ?? { hasAccount: true, authenticated: false })
-      setLoginNotice('登录已过期，请重新登录。')
+      setLoginNoticeKey('cloudWebSessionExpired')
       setView('login')
     },
     [closeSocket]
@@ -374,7 +432,7 @@ export const CloudWebApp: React.FC = () => {
     (frame: Record<string, unknown>): boolean => {
       const ws = wsRef.current
       if (!ws || ws.readyState !== WebSocket.OPEN) {
-        pushLocalNotice('error', '连接已断开，正在重连…')
+        pushLocalNotice('error', translate(languageRef.current, 'cloudWebDisconnectedNotice'))
         return false
       }
       ws.send(JSON.stringify({ v: 1, ...frame }))
@@ -525,12 +583,16 @@ export const CloudWebApp: React.FC = () => {
     })
   }, [clearReconnectTimer, showExpired])
 
-  // 同步文档主题与云端 Web 标记（保证 Portal 弹窗也受移动端 16px 防缩放规则覆盖）
+  // 同步文档主题、语言与云端 Web 标记（保证 Portal 弹窗也受移动端 16px 防缩放规则覆盖）
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
     document.documentElement.setAttribute('data-cloud-web', 'true')
     document.documentElement.classList.toggle('dark', theme === 'dark')
   }, [theme])
+
+  useEffect(() => {
+    applyLanguage(language)
+  }, [language])
 
   // 启动拉取 /v1/me
   useEffect(() => {
@@ -540,7 +602,7 @@ export const CloudWebApp: React.FC = () => {
       if (!active) return
       if (!res.ok || !res.payload) {
         setView('login')
-        setLoginNotice('无法连接云端服务')
+        setLoginNoticeKey('cloudWebCannotConnect')
         return
       }
       setMe(res.payload)
@@ -601,6 +663,12 @@ export const CloudWebApp: React.FC = () => {
     applyTheme(next)
   }
 
+  const toggleLanguage = () => {
+    const next: Language = language === 'zh' ? 'en' : 'zh'
+    setLanguage(next)
+    applyLanguage(next)
+  }
+
   const sendChat = () => {
     const body = draft.trim()
     if (!body) return
@@ -639,7 +707,7 @@ export const CloudWebApp: React.FC = () => {
     return (
       <div className="cloud-web-root safe-top safe-bottom safe-x flex min-h-dvh items-center justify-center bg-surface">
         <div className="border border-rule-hairline bg-raised px-5 py-3 type-caption text-ink-muted">
-          Loading…
+          {t('cloudWebLoading')}
         </div>
       </div>
     )
@@ -648,9 +716,11 @@ export const CloudWebApp: React.FC = () => {
   if (view === 'setup') {
     return (
       <SetupView
+        language={language}
+        onToggleLanguage={toggleLanguage}
         request={request}
         onDone={() => {
-          setLoginNotice('')
+          setLoginNoticeKey(null)
           setView('login')
         }}
       />
@@ -660,24 +730,31 @@ export const CloudWebApp: React.FC = () => {
   if (view === 'login') {
     return (
       <LoginView
-        notice={loginNotice}
+        language={language}
+        onToggleLanguage={toggleLanguage}
+        notice={loginNoticeKey ? t(loginNoticeKey) : ''}
         request={request}
         onLoggedIn={(nextMe) => {
           setMe(nextMe)
-          setLoginNotice('')
+          setLoginNoticeKey(null)
           setView('app')
         }}
       />
     )
   }
 
-  const wsLabel = wsStatus === 'open' ? '在线' : wsStatus === 'connecting' ? '连接中…' : '断开'
-  const agentLabel = AGENT_STATUS_LABELS[session.agentStatus] || session.agentStatus
+  const wsLabel =
+    wsStatus === 'open'
+      ? t('cloudWebWsOpen')
+      : wsStatus === 'connecting'
+        ? t('cloudWebWsConnecting')
+        : t('cloudWebWsClosed')
+  const agentLabel = getAgentStatusLabel(session.agentStatus, language)
   const versionText = `v${me?.version || FALLBACK_WEB_VERSION}`
 
   return (
     <div className="cloud-web-root flex h-dvh flex-col overflow-hidden bg-surface text-ink">
-      {/* 顶栏 45px：品牌印面 + 标签切换 + 在线状态 + 主题切换；外层承接刘海屏安全区 */}
+      {/* 顶栏 45px：品牌印面 + 标签切换 + 在线状态 + 语言/主题切换；外层承接刘海屏安全区 */}
       <header className="top safe-top safe-x flex-shrink-0 border-b border-rule-divide bg-panel">
         <div className="flex h-[45px] items-center gap-3 px-3">
           <div className="flex flex-shrink-0 items-center gap-2">
@@ -687,30 +764,36 @@ export const CloudWebApp: React.FC = () => {
 
           <div
             role="tablist"
-            aria-label="Pi Cloud 导航"
+            aria-label={t('cloudWebNavLabel')}
             className="tab-strip-scroll flex h-full min-w-0 items-stretch overflow-x-auto"
           >
-            {TABS.map((item) => (
-              <Tab
-                key={item.id}
-                active={tab === item.id}
-                label={
-                  item.id === 'chat' && session.unreadCount > 0
-                    ? `${item.label} (${session.unreadCount})`
-                    : item.label
-                }
-                onSelect={() => {
-                  setTab(item.id)
-                  if (item.id === 'chat' && session.unreadCount > 0) markRead()
-                }}
-              />
-            ))}
+            {TAB_KEYS.map((item) => {
+              const tabLabel = t(item.labelKey)
+              return (
+                <Tab
+                  key={item.id}
+                  active={tab === item.id}
+                  label={
+                    item.id === 'chat' && session.unreadCount > 0
+                      ? `${tabLabel} (${session.unreadCount})`
+                      : tabLabel
+                  }
+                  onSelect={() => {
+                    setTab(item.id)
+                    if (item.id === 'chat' && session.unreadCount > 0) markRead()
+                  }}
+                />
+              )
+            })}
           </div>
 
-          <div className="ml-auto flex flex-shrink-0 items-center gap-3">
+          <div className="ml-auto flex flex-shrink-0 items-center gap-2">
             <div className="hidden items-center gap-3 md:flex">
               <StatusText tone={onlineDevices > 0 ? 'success' : 'muted'} dot>
-                {onlineDevices}/{session.devices.length} 台设备在线
+                {t('cloudWebDevicesOnlineCount', {
+                  online: onlineDevices,
+                  total: session.devices.length,
+                })}
               </StatusText>
               {(session.agentStatus === 'thinking' || session.agentStatus === 'replying') && (
                 <Caption className="text-accent">{agentLabel}</Caption>
@@ -720,7 +803,7 @@ export const CloudWebApp: React.FC = () => {
                   <Caption className="text-ink-muted">
                     {runningTasks.length === 1
                       ? `${runningTasks[0].title || runningTasks[0].id}`
-                      : `${runningTasks.length} 个工单执行中`}
+                      : t('cloudWebTasksRunningCount', { count: runningTasks.length })}
                   </Caption>
                   {runningTasks.length === 1 && (
                     <Button
@@ -729,13 +812,28 @@ export const CloudWebApp: React.FC = () => {
                       disabled={Boolean(session.stoppingTaskIds[runningTasks[0].id])}
                       onClick={() => stopTask(runningTasks[0].id)}
                     >
-                      {session.stoppingTaskIds[runningTasks[0].id] ? '正在停止…' : '停止'}
+                      {session.stoppingTaskIds[runningTasks[0].id]
+                        ? t('cloudStoppingTask')
+                        : t('cloudWebStopShort')}
                     </Button>
                   )}
                 </div>
               )}
             </div>
-            <Button variant="ghost" size="sm" onClick={toggleTheme} aria-label="切换 Paper / Ink 主题">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={toggleLanguage}
+              aria-label={t('cloudWebLanguageToggle')}
+            >
+              {language === 'zh' ? t('cloudWebLanguageZh') : t('cloudWebLanguageEn')}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={toggleTheme}
+              aria-label={t('cloudWebThemeToggle')}
+            >
               {theme === 'dark' ? 'Ink' : 'Paper'}
             </Button>
           </div>
@@ -753,7 +851,7 @@ export const CloudWebApp: React.FC = () => {
             </span>
             <button
               type="button"
-              aria-label="关闭提示"
+              aria-label={t('cloudWebDismissNotice')}
               onClick={() => setBannerError(null)}
               className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-sm text-danger hover:bg-danger/10"
             >
@@ -771,15 +869,12 @@ export const CloudWebApp: React.FC = () => {
               <StreamingTranscript
                 ref={transcriptRef}
                 messageCount={session.messages.length}
-                scrollToBottomLabel="回到底部"
-                newMessagesLabel={(count) => `${count} 条新消息`}
+                scrollToBottomLabel={t('scrollToBottom')}
+                newMessagesLabel={(count) => t('newMessages', { count })}
               >
                 {session.awaySummary?.text && (
-                  <div
-                    role="status"
-                    className="border border-rule-divide bg-panel px-3 py-2"
-                  >
-                    <p className="m-0 type-label text-ink">离线期间汇总</p>
+                  <div role="status" className="border border-rule-divide bg-panel px-3 py-2">
+                    <p className="m-0 type-label text-ink">{t('cloudAwaySummaryTitle')}</p>
                     <p className="m-0 mt-0.5 whitespace-pre-wrap type-caption text-ink-muted">
                       {session.awaySummary.text}
                     </p>
@@ -788,76 +883,43 @@ export const CloudWebApp: React.FC = () => {
                 {session.messages.length === 0 ? (
                   <EmptyState
                     icon={Cloud}
-                    title="Pi Cloud"
-                    description="还没有消息。直接说你想让终端做什么。"
+                    title={t('cloudWebTitle')}
+                    description={t('cloudSessionEmpty')}
                   />
                 ) : (
                   session.messages.map((message) => (
-                    <WebChatMessageRow key={message.id} message={message} />
+                    <WebChatMessageRow key={message.id} message={message} language={language} />
                   ))
                 )}
               </StreamingTranscript>
 
-              <div className="composer safe-x flex-shrink-0 border-t border-rule-divide bg-panel">
-                <div className="flex flex-col gap-2 px-4 py-3">
-                  <Textarea
-                    aria-label="发送给云端 Agent 的消息"
-                    value={draft}
-                    rows={3}
-                    placeholder="说说你想让终端做什么…"
-                    onChange={(event) => setDraft(event.target.value)}
-                    onCompositionStart={() => {
-                      composingRef.current = true
-                    }}
-                    onCompositionEnd={() => {
-                      composingRef.current = false
-                    }}
-                    onKeyDown={(event) => {
-                      if (
-                        event.key === 'Enter' &&
-                        !event.shiftKey &&
-                        !composingRef.current &&
-                        !event.nativeEvent.isComposing &&
-                        event.keyCode !== 229
-                      ) {
-                        event.preventDefault()
-                        sendChat()
-                      }
-                    }}
-                  />
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      disabled={!draft.trim()}
-                      onClick={sendChat}
-                    >
-                      发送
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      disabled={!session.canStopReply}
-                      onClick={() => sendFrame({ type: 'stop_reply' })}
-                    >
-                      停止回复
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => setConfirmPlanOpen(true)}
-                    >
-                      确认方案…
-                    </Button>
-                    <Caption className="hidden text-ink-muted sm:inline">
-                      Enter 发送 · Shift+Enter 换行
-                    </Caption>
-                    {(session.agentStatus === 'thinking' || session.agentStatus === 'replying') && (
-                      <Caption className="ml-auto text-accent">{agentLabel}</Caption>
-                    )}
-                  </div>
-                </div>
-              </div>
+              <CloudChatComposer
+                className="composer safe-x flex-shrink-0 border-t border-rule-divide bg-panel"
+                value={draft}
+                onChange={setDraft}
+                onSend={sendChat}
+                canStopReply={session.canStopReply}
+                onStopReply={() => sendFrame({ type: 'stop_reply' })}
+                agentStatus={session.agentStatus}
+                agentStatusText={
+                  session.agentStatus === 'thinking' || session.agentStatus === 'replying'
+                    ? agentLabel
+                    : ''
+                }
+                language={language}
+                stopButtonVariant="secondary"
+                shortcutClassName="hidden text-ink-muted sm:inline"
+                statusClassName="ml-auto text-accent"
+                extraActions={
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setConfirmPlanOpen(true)}
+                  >
+                    {t('cloudWebConfirmPlanAction')}
+                  </Button>
+                }
+              />
             </section>
 
             {/* 宽屏右侧运行态栏（可折叠成 28px 窄条，绝不卸载左侧聊天区） */}
@@ -865,9 +927,9 @@ export const CloudWebApp: React.FC = () => {
               <button
                 ref={expandAsideRef}
                 type="button"
-                aria-label="展开运行态面板"
+                aria-label={t('cloudExpandAside')}
                 aria-expanded={false}
-                title="展开运行态面板"
+                title={t('cloudExpandAside')}
                 onClick={() => {
                   setAsideCollapsed(false)
                   window.requestAnimationFrame(() => collapseAsideRef.current?.focus())
@@ -882,9 +944,9 @@ export const CloudWebApp: React.FC = () => {
                   <button
                     ref={collapseAsideRef}
                     type="button"
-                    aria-label="收起运行态面板"
+                    aria-label={t('cloudCollapseAside')}
                     aria-expanded={true}
-                    title="收起运行态面板"
+                    title={t('cloudCollapseAside')}
                     onClick={() => {
                       setAsideCollapsed(true)
                       window.requestAnimationFrame(() => expandAsideRef.current?.focus())
@@ -893,17 +955,20 @@ export const CloudWebApp: React.FC = () => {
                   >
                     <PanelRightClose size={14} aria-hidden="true" />
                   </button>
-                  <span className="type-label text-ink-muted">运行态</span>
+                  <span className="type-label text-ink-muted">{t('cloudAsideTitle')}</span>
                 </div>
                 <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
                   <TaskCard
                     compact
+                    language={language}
                     tasks={session.tasks}
                     devices={session.devices}
                     stoppingTaskIds={session.stoppingTaskIds}
                     answerDrafts={answerDrafts}
                     instructionDrafts={instructionDrafts}
-                    onAnswerDraft={(id, val) => setAnswerDrafts((prev) => ({ ...prev, [id]: val }))}
+                    onAnswerDraft={(id, val) =>
+                      setAnswerDrafts((prev) => ({ ...prev, [id]: val }))
+                    }
                     onInstructionDraft={(id, val) =>
                       setInstructionDrafts((prev) => ({ ...prev, [id]: val }))
                     }
@@ -919,28 +984,37 @@ export const CloudWebApp: React.FC = () => {
                   />
                   <UnitCard
                     units={session.units}
+                    language={language}
                     onCloseUnit={(unitId) => sendFrame({ type: 'close_unit', unitId })}
                   />
                   <DeviceCard
                     devices={session.devices}
                     pairCode={pairCode}
+                    language={language}
                     onGeneratePairCode={async () => {
                       const res = await request<WebPairCode>('POST', '/v1/pair/code')
                       if (res.ok && res.payload) setPairCode(res.payload)
                     }}
                     onRemoveDevice={async (deviceId) => {
-                      const res = await request('DELETE', `/v1/devices/${encodeURIComponent(deviceId)}`)
+                      const res = await request(
+                        'DELETE',
+                        `/v1/devices/${encodeURIComponent(deviceId)}`
+                      )
                       if (res.ok) void loadAuxiliary()
                     }}
                   />
                   <AuthCard
                     authorizations={session.authorizations}
+                    language={language}
                     onRevoke={async (id) => {
-                      const res = await request('DELETE', `/v1/authorizations/${encodeURIComponent(id)}`)
+                      const res = await request(
+                        'DELETE',
+                        `/v1/authorizations/${encodeURIComponent(id)}`
+                      )
                       if (res.ok) void loadAuxiliary()
                     }}
                   />
-                  <NoticeCard notices={session.notices} />
+                  <NoticeCard notices={session.notices} language={language} />
                 </div>
               </aside>
             )}
@@ -951,12 +1025,15 @@ export const CloudWebApp: React.FC = () => {
               {tab === 'tasks' && (
                 <>
                   <TaskCard
+                    language={language}
                     tasks={session.tasks}
                     devices={session.devices}
                     stoppingTaskIds={session.stoppingTaskIds}
                     answerDrafts={answerDrafts}
                     instructionDrafts={instructionDrafts}
-                    onAnswerDraft={(id, val) => setAnswerDrafts((prev) => ({ ...prev, [id]: val }))}
+                    onAnswerDraft={(id, val) =>
+                      setAnswerDrafts((prev) => ({ ...prev, [id]: val }))
+                    }
                     onInstructionDraft={(id, val) =>
                       setInstructionDrafts((prev) => ({ ...prev, [id]: val }))
                     }
@@ -974,10 +1051,12 @@ export const CloudWebApp: React.FC = () => {
                   <div className="flex flex-col gap-4 lg:hidden">
                     <UnitCard
                       units={session.units}
+                      language={language}
                       onCloseUnit={(unitId) => sendFrame({ type: 'close_unit', unitId })}
                     />
                     <AuthCard
                       authorizations={session.authorizations}
+                      language={language}
                       onRevoke={async (id) => {
                         const res = await request(
                           'DELETE',
@@ -986,7 +1065,7 @@ export const CloudWebApp: React.FC = () => {
                         if (res.ok) void loadAuxiliary()
                       }}
                     />
-                    <NoticeCard notices={session.notices} />
+                    <NoticeCard notices={session.notices} language={language} />
                   </div>
                 </>
               )}
@@ -994,12 +1073,16 @@ export const CloudWebApp: React.FC = () => {
                 <DeviceCard
                   devices={session.devices}
                   pairCode={pairCode}
+                  language={language}
                   onGeneratePairCode={async () => {
                     const res = await request<WebPairCode>('POST', '/v1/pair/code')
                     if (res.ok && res.payload) setPairCode(res.payload)
                   }}
                   onRemoveDevice={async (deviceId) => {
-                    const res = await request('DELETE', `/v1/devices/${encodeURIComponent(deviceId)}`)
+                    const res = await request(
+                      'DELETE',
+                      `/v1/devices/${encodeURIComponent(deviceId)}`
+                    )
                     if (res.ok) void loadAuxiliary()
                   }}
                 />
@@ -1011,6 +1094,7 @@ export const CloudWebApp: React.FC = () => {
                   dreams={dreams}
                   busy={memoryBusy}
                   docDrafts={docDrafts}
+                  language={language}
                   onDocDraftChange={(name, val) =>
                     setDocDrafts((prev) => ({ ...prev, [name]: val }))
                   }
@@ -1034,6 +1118,7 @@ export const CloudWebApp: React.FC = () => {
                   models={configModels}
                   feedback={configFeedback.text}
                   feedbackTone={configFeedback.tone}
+                  language={language}
                   onDraftChange={setConfigDraft}
                   onModelsChange={setConfigModels}
                   onFeedbackChange={(text, tone = 'info') => setConfigFeedback({ text, tone })}
@@ -1050,12 +1135,19 @@ export const CloudWebApp: React.FC = () => {
       <footer className="bottom safe-bottom safe-x flex-shrink-0 border-t border-rule-divide bg-panel type-caption text-ink-muted">
         <div className="flex h-7 items-center gap-3 px-3">
           <DataText className="text-ink-muted">{versionText}</DataText>
-          <StatusText tone={wsStatus === 'open' ? 'success' : wsStatus === 'connecting' ? 'warning' : 'danger'} dot>
+          <StatusText
+            tone={wsStatus === 'open' ? 'success' : wsStatus === 'connecting' ? 'warning' : 'danger'}
+            dot
+          >
             {wsLabel}
           </StatusText>
           <span>{agentLabel}</span>
           <DataText className="ml-auto text-ink-muted">
-            seq {session.lastSeq} · {onlineDevices}/{session.devices.length} 在线
+            seq {session.lastSeq} ·{' '}
+            {t('cloudWebFooterDevicesOnline', {
+              online: onlineDevices,
+              total: session.devices.length,
+            })}
           </DataText>
         </div>
       </footer>
@@ -1063,6 +1155,7 @@ export const CloudWebApp: React.FC = () => {
       <ConfirmPlanModal
         open={confirmPlanOpen}
         devices={session.devices}
+        language={language}
         onClose={() => setConfirmPlanOpen(false)}
         onSubmit={(payload) => sendFrame({ type: 'confirm_plan', ...payload })}
       />

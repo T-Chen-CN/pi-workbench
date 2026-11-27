@@ -19,6 +19,7 @@ import { GitView } from '../git/GitView'
 import { CommitDetailView } from '../git/CommitDetailView'
 import { Spinner } from '../ui/ui'
 import { WorkspaceScopeProvider } from '../../workspace/WorkspaceScope'
+import { WorkspaceStoresProvider } from '../../store/WorkspaceStoresContext'
 import { subscribeEditorTabs } from '../../workspace/editorTabs'
 import { useI18nStore } from '../../store/i18nStore'
 import { useSessionStore } from '../../store/sessionStore'
@@ -71,6 +72,17 @@ interface WorkspaceViewProps {
  * 同时保持组件与所有 Agent / 审批 / PTY 订阅常驻不卸载。
  */
 export const WorkspaceView: React.FC<WorkspaceViewProps> = React.memo(function WorkspaceView({
+  workspacePath,
+  active,
+}) {
+  return (
+    <WorkspaceStoresProvider workspacePath={workspacePath}>
+      <WorkspaceViewContent workspacePath={workspacePath} active={active} />
+    </WorkspaceStoresProvider>
+  )
+})
+
+const WorkspaceViewContent: React.FC<WorkspaceViewProps> = React.memo(function WorkspaceViewContent({
   workspacePath,
   active,
 }) {

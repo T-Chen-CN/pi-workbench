@@ -1,8 +1,10 @@
 /**
- * 云端 Web 客户端协议帧归并适配、主题偏好与 HTTP 请求封装。
- * 共享类型、格式化工具与 WS 帧归并器统一来自 `@pi-workbench/cloud-ui`，零 Electron / zustand / 桌面 store 依赖。
+ * 云端 Web 客户端协议帧归并适配、主题与语言偏好、HTTP 请求封装。
+ * 共享类型、格式化工具与 WS 帧归并器统一来自 `@pi-workbench/cloud-ui`，翻译来自 `@pi-workbench/i18n`，
+ * 零 Electron / zustand / 桌面 store 依赖。
  */
 
+import { translate, type Language } from '@pi-workbench/i18n'
 import {
   CLOUD_ACTIVE_TASK_STATUSES,
   CLOUD_PROVIDER_PRESETS,
@@ -22,6 +24,7 @@ import {
   type CloudMemoryItem,
   type CloudMemoryKind,
   type CloudNotice,
+  type CloudPairCode,
   type CloudSessionState,
   type CloudTaskRow,
   type CloudUnitRow,
@@ -52,11 +55,7 @@ export interface WebConfigDraft {
   apiKey: string
 }
 
-export interface WebPairCode {
-  code: string
-  expiresAt: number
-}
-
+export type WebPairCode = CloudPairCode
 export type WebTaskItem = CloudTaskRow
 export type WebSessionState = CloudSessionState
 export type FrameApplyResult = ApplyCloudFrameResult
@@ -69,6 +68,7 @@ export interface RequestResult<T = any> {
 }
 
 export const THEME_STORAGE_KEY = 'pi-cloud-theme'
+export const LANG_STORAGE_KEY = 'pi-cloud-lang'
 export const ACTIVE_TASK_STATUSES = CLOUD_ACTIVE_TASK_STATUSES
 export const PROVIDER_PRESETS = CLOUD_PROVIDER_PRESETS
 export const INITIAL_WEB_SESSION_STATE = INITIAL_CLOUD_SESSION_STATE
@@ -101,6 +101,21 @@ export const MEMORY_KIND_LABELS: Record<CloudMemoryKind, string> = {
   todo: '待办',
 }
 
+export function getAgentStatusLabel(status: string, language: Language = 'zh'): string {
+  switch (status) {
+    case 'idle':
+      return translate(language, 'cloudWebAgentIdle')
+    case 'thinking':
+      return translate(language, 'cloudAgentThinking')
+    case 'replying':
+      return translate(language, 'cloudAgentReplying')
+    case 'error':
+      return translate(language, 'cloudWebAgentError')
+    default:
+      return status
+  }
+}
+
 export function formatTime(ts?: number): string {
   return formatCloudTime(ts, true)
 }
@@ -128,6 +143,27 @@ export function applyTheme(theme: WebTheme): void {
   root.classList.toggle('dark', theme === 'dark')
   try {
     window.localStorage.setItem(THEME_STORAGE_KEY, theme)
+  } catch {
+    // 忽略存储限制
+  }
+}
+
+export function resolveInitialLanguage(): Language {
+  try {
+    const saved = window.localStorage.getItem(LANG_STORAGE_KEY)
+    if (saved === 'en' || saved === 'zh') return saved
+  } catch {
+    // 隐私模式可能禁用 localStorage
+  }
+  return 'zh'
+}
+
+export function applyLanguage(language: Language): void {
+  if (typeof document !== 'undefined') {
+    document.documentElement.lang = language === 'en' ? 'en' : 'zh-CN'
+  }
+  try {
+    window.localStorage.setItem(LANG_STORAGE_KEY, language)
   } catch {
     // 忽略存储限制
   }
@@ -181,4 +217,5 @@ export type {
   CloudMemoryKind,
   CloudNotice,
   CloudUnitRow,
+  Language,
 }

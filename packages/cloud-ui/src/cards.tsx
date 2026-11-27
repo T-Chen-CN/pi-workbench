@@ -1,12 +1,13 @@
 /**
  * 桌面端 CloudView 与云端 Web 共享的业务卡片与确认授权弹窗。
  *
- * 所有文案通过可选 `labels` 注入（默认中文，供 Web 直接使用；桌面端传入 `t(...)` 实现中英双语），
+ * 默认文案统一从 `@pi-workbench/i18n` 按 `language`（默认 `'zh'`）取词，同时支持调用方通过 `labels` 覆盖，
  * 零桌面 store / i18nStore / Electron 依赖。
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Square, Trash2 } from 'lucide-react'
+import { translate, type Language, type TranslationKey } from '@pi-workbench/i18n'
 import { formatCloudDuration, formatCloudTime, summarizeCloudTaskPreview } from './format'
 import {
   Button,
@@ -29,6 +30,24 @@ import {
   type CloudTaskRow,
   type CloudUnitRow,
 } from './types'
+
+const TASK_STATUS_I18N_KEY: Record<string, TranslationKey> = {
+  queued: 'cloudTaskQueued',
+  assigned: 'cloudTaskAssigned',
+  running: 'cloudTaskRunning',
+  waiting_human: 'cloudTaskWaiting',
+  done: 'cloudTaskDone',
+  failed: 'cloudTaskFailed',
+  cancelled: 'cloudTaskCancelled',
+  interrupted: 'cloudTaskInterrupted',
+  expired: 'cloudTaskExpired',
+  rejected: 'cloudTaskRejected',
+}
+
+export function getCloudTaskStatusLabel(status: string, language: Language = 'zh'): string {
+  const key = TASK_STATUS_I18N_KEY[status]
+  return key ? translate(language, key) : status
+}
 
 export const DEFAULT_CLOUD_TASK_STATUS_LABELS: Record<string, string> = {
   queued: '排队中',
@@ -57,17 +76,20 @@ export interface CloudTaskCardLabels {
   statusLabel?: (status: string) => string
 }
 
-const DEFAULT_TASK_CARD_LABELS: CloudTaskCardLabels = {
-  title: '工单',
-  empty: '还没有工单',
-  stopping: '正在停止…',
-  stopTask: '停止工单',
-  offlineCancelled: '设备离线，工单已取消',
-  questionWaiting: '终端在等你回答',
-  answerPlaceholder: '回答',
-  send: '发送',
-  instructionPlaceholder: '向运行中工单追加指令…',
-  sendInstruction: '追加指令',
+function defaultTaskCardLabels(language: Language): CloudTaskCardLabels {
+  return {
+    title: translate(language, 'cloudTasks'),
+    empty: translate(language, 'cloudNoTasks'),
+    stopping: translate(language, 'cloudStoppingTask'),
+    stopTask: translate(language, 'cloudStopTask'),
+    offlineCancelled: translate(language, 'cloudOfflineTaskCancelled'),
+    questionWaiting: translate(language, 'cloudQuestionWaiting'),
+    answerPlaceholder: translate(language, 'cloudAnswer'),
+    send: translate(language, 'cloudSend'),
+    instructionPlaceholder: translate(language, 'cloudSendInstructionPlaceholder'),
+    sendInstruction: translate(language, 'cloudSendInstruction'),
+    statusLabel: (status) => getCloudTaskStatusLabel(status, language),
+  }
 }
 
 export interface CloudTaskCardProps {
@@ -79,6 +101,7 @@ export interface CloudTaskCardProps {
   compact?: boolean
   showCount?: boolean
   showElapsed?: boolean
+  language?: Language
   labels?: Partial<CloudTaskCardLabels>
   onAnswerDraft: (taskId: string, value: string) => void
   onInstructionDraft: (taskId: string, value: string) => void
@@ -97,6 +120,7 @@ export const CloudTaskCard: React.FC<CloudTaskCardProps> = ({
   compact = false,
   showCount = false,
   showElapsed = false,
+  language = 'zh',
   labels,
   onAnswerDraft,
   onInstructionDraft,
@@ -105,7 +129,7 @@ export const CloudTaskCard: React.FC<CloudTaskCardProps> = ({
   onStopTask,
   renderResult,
 }) => {
-  const text = { ...DEFAULT_TASK_CARD_LABELS, ...labels }
+  const text = { ...defaultTaskCardLabels(language), ...labels }
   const onlineById = useMemo(() => {
     const map = new Map<string, boolean>()
     for (const device of devices) map.set(device.id, device.online)
@@ -137,7 +161,7 @@ export const CloudTaskCard: React.FC<CloudTaskCardProps> = ({
               ? text.stopping
               : text.statusLabel
                 ? text.statusLabel(task.status)
-                : (DEFAULT_CLOUD_TASK_STATUS_LABELS[task.status] ?? task.status)
+                : getCloudTaskStatusLabel(task.status, language)
 
             return (
               <li
@@ -281,23 +305,26 @@ export interface CloudUnitCardLabels {
   hint: string
 }
 
-const DEFAULT_UNIT_CARD_LABELS: CloudUnitCardLabels = {
-  title: '工作单元',
-  empty: '还没有工作单元（派活后自动创建，一个单元一个工作树）',
-  active: '使用中',
-  closed: '已结束',
-  closing: '回收中…',
-  dirty: '有未提交改动',
-  closeAction: '结束并回收',
-  hint: '工作树干净时工单结束就自动回收；这里只为脏树保留手动入口',
+function defaultUnitCardLabels(language: Language): CloudUnitCardLabels {
+  return {
+    title: translate(language, 'cloudUnits'),
+    empty: translate(language, 'cloudNoUnits'),
+    active: translate(language, 'cloudUnitActive'),
+    closed: translate(language, 'cloudUnitClosed'),
+    closing: translate(language, 'cloudUnitClosing'),
+    dirty: translate(language, 'cloudUnitDirty'),
+    closeAction: translate(language, 'cloudUnitClose'),
+    hint: translate(language, 'cloudUnitHint'),
+  }
 }
 
 export const CloudUnitCard: React.FC<{
   units: CloudUnitRow[]
+  language?: Language
   labels?: Partial<CloudUnitCardLabels>
   onCloseUnit: (unitId: string) => void
-}> = ({ units, labels, onCloseUnit }) => {
-  const text = { ...DEFAULT_UNIT_CARD_LABELS, ...labels }
+}> = ({ units, language = 'zh', labels, onCloseUnit }) => {
+  const text = { ...defaultUnitCardLabels(language), ...labels }
   const visible = units.slice(0, 8)
   return (
     <Card density="compact">
@@ -368,17 +395,20 @@ export interface CloudNoticeCardLabels {
   empty: string
 }
 
-const DEFAULT_NOTICE_CARD_LABELS: CloudNoticeCardLabels = {
-  title: '最近提示',
-  empty: '暂无提示',
+function defaultNoticeCardLabels(language: Language): CloudNoticeCardLabels {
+  return {
+    title: translate(language, 'cloudNotices'),
+    empty: translate(language, 'cloudNoticesEmpty'),
+  }
 }
 
 export const CloudNoticeCard: React.FC<{
   notices: CloudNotice[]
   withSeconds?: boolean
+  language?: Language
   labels?: Partial<CloudNoticeCardLabels>
-}> = ({ notices, withSeconds = false, labels }) => {
-  const text = { ...DEFAULT_NOTICE_CARD_LABELS, ...labels }
+}> = ({ notices, withSeconds = false, language = 'zh', labels }) => {
+  const text = { ...defaultNoticeCardLabels(language), ...labels }
   return (
     <Card density="compact">
       <CardHeader title={text.title} />
@@ -415,12 +445,14 @@ export interface CloudAuthorizationCardLabels {
   revokeLabel?: string
 }
 
-const DEFAULT_AUTH_CARD_LABELS: CloudAuthorizationCardLabels = {
-  title: '已确认的授权',
-  empty: '还没有授权：确认方案之后才允许派活',
-  quotaText: (used, quota) => `额度 ${used}/${quota}`,
-  expiresText: (formatted) => `至 ${formatted}`,
-  revokeLabel: '撤销',
+function defaultAuthCardLabels(language: Language): CloudAuthorizationCardLabels {
+  return {
+    title: translate(language, 'cloudAuthorizations'),
+    empty: translate(language, 'cloudNoAuthorizations'),
+    quotaText: (used, quota) => translate(language, 'cloudQuota', { used, quota }),
+    expiresText: (formatted) => translate(language, 'cloudWebAuthExpires', { time: formatted }),
+    revokeLabel: translate(language, 'cloudWebRevokeAuth'),
+  }
 }
 
 export const CloudAuthorizationCard: React.FC<{
@@ -428,9 +460,10 @@ export const CloudAuthorizationCard: React.FC<{
   action?: React.ReactNode
   onRevoke?: (id: string) => Promise<void> | void
   showTargets?: boolean
+  language?: Language
   labels?: Partial<CloudAuthorizationCardLabels>
-}> = ({ authorizations, action, onRevoke, showTargets = true, labels }) => {
-  const text = { ...DEFAULT_AUTH_CARD_LABELS, ...labels }
+}> = ({ authorizations, action, onRevoke, showTargets = true, language = 'zh', labels }) => {
+  const text = { ...defaultAuthCardLabels(language), ...labels }
   return (
     <Card density="compact">
       <CardHeader title={text.title} action={action} />
@@ -474,7 +507,7 @@ export const CloudAuthorizationCard: React.FC<{
                     className="text-danger hover:bg-danger/10 hover:text-danger"
                     onClick={() => void onRevoke(item.id)}
                   >
-                    {text.revokeLabel ?? '撤销'}
+                    {text.revokeLabel ?? translate(language, 'cloudWebRevokeAuth')}
                   </Button>
                 </div>
               )}
@@ -502,25 +535,28 @@ export interface CloudConfirmPlanModalLabels {
   missingTargetError: string
 }
 
-const DEFAULT_CONFIRM_PLAN_LABELS: CloudConfirmPlanModalLabels = {
-  title: '确认方案并授权派活',
-  close: '关闭',
-  cancel: '取消',
-  confirm: '确认',
-  hint: '授权范围是「设备 × 仓库」，换设备或换仓库必须重新确认。',
-  planLabel: '方案原文',
-  planPlaceholder: '方案原文（会写进会话记录）',
-  deviceLabel: '设备',
-  repoLabel: '仓库（仅 git）',
-  noGitRepo: '该设备暂无可用的 Git 仓库',
-  quotaLabel: '工单额度',
-  missingPlanError: '请填写方案原文',
-  missingTargetError: '请选择设备与仓库',
+function defaultConfirmPlanLabels(language: Language): CloudConfirmPlanModalLabels {
+  return {
+    title: translate(language, 'cloudWebConfirmPlanModalTitle'),
+    close: translate(language, 'close'),
+    cancel: translate(language, 'cancel'),
+    confirm: translate(language, 'confirm'),
+    hint: translate(language, 'cloudAuthorizeHint'),
+    planLabel: translate(language, 'cloudPlanText'),
+    planPlaceholder: translate(language, 'cloudPlanTextPlaceholder'),
+    deviceLabel: translate(language, 'cloudAuthorizeDevice'),
+    repoLabel: translate(language, 'cloudAuthorizeRepo'),
+    noGitRepo: translate(language, 'cloudNoGitRepo'),
+    quotaLabel: translate(language, 'cloudQuotaLabel'),
+    missingPlanError: translate(language, 'cloudWebConfirmPlanMissingPlan'),
+    missingTargetError: translate(language, 'cloudWebConfirmPlanMissingTarget'),
+  }
 }
 
 export const CloudConfirmPlanModal: React.FC<{
   open: boolean
   devices: CloudDeviceRow[]
+  language?: Language
   labels?: Partial<CloudConfirmPlanModalLabels>
   showDeviceIdInOption?: boolean
   showRepoPathInOption?: boolean
@@ -533,13 +569,14 @@ export const CloudConfirmPlanModal: React.FC<{
 }> = ({
   open,
   devices,
+  language = 'zh',
   labels,
   showDeviceIdInOption = false,
   showRepoPathInOption = false,
   onClose,
   onSubmit,
 }) => {
-  const text = { ...DEFAULT_CONFIRM_PLAN_LABELS, ...labels }
+  const text = { ...defaultConfirmPlanLabels(language), ...labels }
   const [planText, setPlanText] = useState('')
   const [deviceId, setDeviceId] = useState('')
   const [workspacePath, setWorkspacePath] = useState('')

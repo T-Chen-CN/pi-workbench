@@ -1,6 +1,5 @@
-// 带相等函数的 useStore：zustand v4 的 `useStore` 传 equalityFn 会报弃用警告
-import { useStoreWithEqualityFn } from 'zustand/traditional'
 import { createStore, type StoreApi } from 'zustand/vanilla'
+import { useStoreWithComparator } from './useStoreWithComparator'
 import { OpenFile, OpenFileInput, EditorState } from '../types'
 import { defaultViewFor, detectFileKind, supportsSourceView, type FileViewMode } from '../utils/fileKind'
 
@@ -187,6 +186,22 @@ export function createEditorStore(): StoreApi<EditorStore> {
 const stores = new Map<string, StoreApi<EditorStore>>()
 const EMPTY_STORE = createEditorStore()
 
+/** 只读查询某个工作区的编辑器 store；未挂载或已关闭时返回 null，绝不分配僵尸 store */
+export function peekEditorStore(
+  workspacePath: string | null | undefined
+): StoreApi<EditorStore> | null {
+  if (!workspacePath) return null
+  return stores.get(workspacePath) ?? null
+}
+
+/** 将既有 store 重新登记到注册表（供 WorkspaceStoresProvider 在 StrictMode 挂载期复用） */
+export function attachEditorStore(workspacePath: string, store: StoreApi<EditorStore>): void {
+  if (!workspacePath) return
+  if (!stores.has(workspacePath)) {
+    stores.set(workspacePath, store)
+  }
+}
+
 /** 取（必要时创建）某个工作区的编辑器 store；工作区为空时返回共享空 store */
 export function editorStoreFor(workspacePath: string | null | undefined): StoreApi<EditorStore> {
   if (!workspacePath) return EMPTY_STORE
@@ -198,8 +213,12 @@ export function editorStoreFor(workspacePath: string | null | undefined): StoreA
   return store
 }
 
-/** 工作区被显式关闭后释放其编辑器状态 */
-export function disposeEditorStore(workspacePath: string): void {
+/** 工作区被显式关闭或卸载后释放其编辑器状态；传入 expectedStore 时避免误删重开的新实例 */
+export function disposeEditorStore(
+  workspacePath: string,
+  expectedStore?: StoreApi<EditorStore>
+): void {
+  if (expectedStore && stores.get(workspacePath) !== expectedStore) return
   stores.delete(workspacePath)
 }
 
@@ -221,7 +240,7 @@ export function useEditorStore<T>(
   isEqual?: (a: T, b: T) => boolean
 ): EditorStore | T {
   const store = editorStoreFor(workspacePath)
-  return useStoreWithEqualityFn(store, selector ?? ((state) => state as unknown as T), isEqual)
+  return useStoreWithComparator(store, selector, isEqual)
 }
 
 /** 只关心「哪些标签开着」：编辑正文不算变化，避免每次按键重渲染标签条 / 附件菜单 */
