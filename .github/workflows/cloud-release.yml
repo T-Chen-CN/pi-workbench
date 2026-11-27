@@ -55,6 +55,7 @@ jobs:
           npm run build:bridge
           npm run type-check:cloud
           npm run type-check --workspace @pi-workbench/cloud-ui
+          npm run build:cloud-web
           npx vitest run tests/cloud/ tests/electron/phase0-security-and-reliability.test.ts tests/ui/design-system.test.ts
 
       - name: Build self-contained cloud bundle
