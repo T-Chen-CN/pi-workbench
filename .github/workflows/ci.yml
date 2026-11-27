@@ -20,6 +20,7 @@ jobs:
           cache: npm
 
       - run: npm ci
+      - run: npm run build:i18n
       - run: npm run build:bridge
       - run: npm run type-check
       - run: npm run build:cloud
@@ -28,7 +29,7 @@ jobs:
       - run: npm run build
 
   package-smoke:
-    # 打包冒烟：确认 electron-builder 能产出未压缩的应用目录（不发布、不签名）
+    # Windows 全量测试 + 打包冒烟 + Playwright Electron 真实窗口冒烟（不发布、不签名）
     runs-on: windows-latest
     needs: verify
     env:
@@ -42,5 +43,11 @@ jobs:
           cache: npm
 
       - run: npm ci
+      - run: npm test
       - run: npm run build
       - run: npx electron-builder --win --dir --publish never
+      - name: Electron smoke E2E
+        shell: bash
+        env:
+          PI_E2E_EXECUTABLE: release/win-unpacked/Pi Workbench.exe
+        run: npm run test:e2e:smoke

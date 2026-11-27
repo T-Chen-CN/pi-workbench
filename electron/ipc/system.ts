@@ -360,7 +360,7 @@ export function registerSystemIpc(context: SystemIpcContext): void {
     })
     if (!parsed.ok) return { success: false, error: parsed.error }
     try {
-      clipboard.writeText(parsed.data.text)
+      await clipboard.writeText(parsed.data.text)
       return { success: true }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }

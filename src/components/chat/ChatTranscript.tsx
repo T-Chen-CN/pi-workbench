@@ -2,6 +2,7 @@
 
 import React from 'react'
 import { AlertCircle, History } from 'lucide-react'
+import type { TranslationKey, TranslationParams } from '@pi-workbench/i18n'
 import { useChatStore, type ChatMessage } from '../../store/chatStore'
 import type { StructuredPlan } from '../../types/electron'
 import type { useVirtualRows } from '../../hooks/useVirtualRows'
@@ -20,7 +21,7 @@ export interface ChatTranscriptProps {
   activeSessionId: string | null
   activeKey: string | null
   handleNewSession: () => void | Promise<void>
-  t: (key: any, params?: any) => string
+  t: (key: TranslationKey, params?: TranslationParams) => string
   transcriptRef: React.RefObject<HTMLDivElement | null>
   handleTranscriptScroll: () => void
   messages: ChatMessage[]

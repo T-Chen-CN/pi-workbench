@@ -1,6 +1,7 @@
 /** 聊天输入区附件、图像预处理与符号扫描子 Hook */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { TranslationKey, TranslationParams } from '@pi-workbench/i18n'
 import { useChatStore } from '../store/chatStore'
 import { editorStoreFor } from '../store/editorStore'
 import { api } from '../api'
@@ -36,7 +37,7 @@ export interface UseChatAttachmentsOptions {
   imagesAllowed: boolean
   /** 仅在符号选择浮层实际打开时扫描当前文件符号，避免背景工作区每次按键后 400ms 跑全文正则 */
   symbolsActive: boolean
-  t: (key: any, params?: Record<string, string | number>) => string
+  t: (key: TranslationKey, params?: TranslationParams) => string
   setShowAttachMenu: (open: boolean) => void
   setAttachMode: (mode: 'files' | 'symbols') => void
 }

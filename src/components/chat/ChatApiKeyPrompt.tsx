@@ -2,6 +2,7 @@
 
 import React from 'react'
 import { Settings2 } from 'lucide-react'
+import type { TranslationKey, TranslationParams } from '@pi-workbench/i18n'
 import { Button, EmptyState } from '../ui/ui'
 import { emitAppEvent } from '../../utils/appEvents'
 import { ChatPanelHeader } from './ChatPanelHeader'
@@ -10,7 +11,7 @@ export interface ChatApiKeyPromptProps {
   onCollapse?: () => void
   collapseButtonRef?: React.Ref<HTMLButtonElement>
   panelId?: string
-  t: (key: any) => string
+  t: (key: TranslationKey, params?: TranslationParams) => string
   fatalError: string | null
   /** 头部的工作树 chip 需要工作区路径 */
   workspacePath?: string

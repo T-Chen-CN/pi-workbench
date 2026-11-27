@@ -30,14 +30,29 @@ const mocks = vi.hoisted(() => {
     encryptString: (value: string) => Buffer.from(`enc:${value}`, 'utf-8'),
     decryptString: (buffer: Buffer) => Buffer.from(buffer).toString('utf-8').slice(4),
   }
-  return { handlers, state, shell, safeStorage }
+  const mainFrame = { url: 'pw-app://bundle/index.html' }
+  const trustedWebContents = {
+    id: 1,
+    mainFrame,
+    isDestroyed: () => false,
+    on: () => {},
+    once: () => {},
+    executeJavaScript: async () => undefined,
+    send: vi.fn(),
+    openDevTools: () => {},
+  }
+  const mainWindow = {
+    isDestroyed: () => false,
+    webContents: trustedWebContents,
+  }
+  return { handlers, state, shell, safeStorage, mainFrame, trustedWebContents, mainWindow }
 })
 
 vi.mock('electron', () => ({
   app: {
     isPackaged: false,
-    // 心跳模块在装配时就会读凭据；没 ready 时 credential() 必须返回 null（不能抛）
-    isReady: () => false,
+    // 默认 ready=true，让所有主进程 IPC 测试真实经过 isTrustedIpcSender 校验
+    isReady: () => true,
     getAppPath: () => mocks.state.appDir,
     getPath: () => mocks.state.appDir,
     setPath: () => {},
@@ -103,8 +118,19 @@ function getHandler(channel: string): IpcHandler {
   return handler
 }
 
+function trustedEvent() {
+  return {
+    sender: mocks.trustedWebContents,
+    senderFrame: mocks.mainFrame,
+  }
+}
+
+function callWithEvent(event: unknown, channel: string, ...args: unknown[]): Promise<IpcResult> {
+  return Promise.resolve(getHandler(channel)(event, ...args) as IpcResult)
+}
+
 function call(channel: string, ...args: unknown[]): Promise<IpcResult> {
-  return Promise.resolve(getHandler(channel)({}, ...args) as IpcResult)
+  return callWithEvent(trustedEvent(), channel, ...args)
 }
 
 let appDir: string
@@ -116,6 +142,8 @@ beforeAll(async () => {
   // 真实应用启动时会先创建 config/，这里模拟同样的前置状态
   await fs.mkdir(path.join(appDir, 'config'), { recursive: true })
   await import('../../electron/main')
+  const { configureIpcWindow } = await import('../../electron/ipc/register')
+  configureIpcWindow(() => mocks.mainWindow as any)
 })
 
 afterAll(async () => {
@@ -124,6 +152,7 @@ afterAll(async () => {
 })
 
 beforeEach(async () => {
+  mocks.trustedWebContents.send.mockClear()
   await fs.rm(path.join(appDir, 'config'), { recursive: true, force: true })
   await fs.mkdir(path.join(appDir, 'config'), { recursive: true })
   workDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'pi-workbench-ipc-')))
@@ -335,32 +364,106 @@ describe('filesystem IPC handlers', () => {
   })
 
   it('starts and stops the workspace watcher and cleans up child worktree watchers on workspace:dispose', async () => {
-    const sender = { isDestroyed: () => false, send: vi.fn() }
     const childWorktree = path.join(workDir, '.pi-workbench', 'worktrees', 'wt-child')
     await fs.mkdir(childWorktree, { recursive: true })
 
-    await expect(getHandler('fs:watch')({ sender }, workDir)).resolves.toMatchObject({
+    await expect(call('fs:watch', workDir)).resolves.toMatchObject({
       success: true,
     })
-    await expect(getHandler('fs:watch')({ sender }, childWorktree)).resolves.toMatchObject({
+    await expect(call('fs:watch', childWorktree)).resolves.toMatchObject({
       success: true,
     })
     await expect(call('workspace:dispose', workDir)).resolves.toMatchObject({ success: true })
 
     // dispose 后修改子工作树文件不应再触发任何 fs:changed 推送
-    sender.send.mockClear()
+    mocks.trustedWebContents.send.mockClear()
     await fs.writeFile(path.join(childWorktree, 'after-dispose.txt'), 'quiet')
     await new Promise((resolve) => setTimeout(resolve, 250))
-    expect(sender.send).not.toHaveBeenCalled()
+    expect(mocks.trustedWebContents.send).not.toHaveBeenCalled()
   })
 
   it('fails cleanly when watching a nonexistent directory', async () => {
-    const sender = { isDestroyed: () => false, send: vi.fn() }
-
-    const result = await getHandler('fs:watch')({ sender }, path.join(workDir, 'missing'))
+    const result = await call('fs:watch', path.join(workDir, 'missing'))
 
     expect(result.success).toBe(false)
     expect(result.error).toBeTruthy()
+  })
+})
+
+describe('IPC sender trust enforcement', () => {
+  it('rejects untrusted webContents senders', async () => {
+    const foreignFrame = { url: 'pw-app://bundle/index.html' }
+    const foreignEvent = {
+      sender: { id: 999, mainFrame: foreignFrame, isDestroyed: () => false },
+      senderFrame: foreignFrame,
+    }
+    await expect(callWithEvent(foreignEvent, 'app:getSettings')).resolves.toEqual({
+      success: false,
+      error: 'Untrusted IPC sender',
+    })
+  })
+
+  it('rejects subframes and missing senderFrame even from the main webContents', async () => {
+    const subFrame = { url: 'pw-app://bundle/sub.html' }
+    await expect(
+      callWithEvent(
+        {
+          sender: mocks.trustedWebContents,
+          senderFrame: subFrame,
+        },
+        'app:getSettings'
+      )
+    ).resolves.toEqual({
+      success: false,
+      error: 'Untrusted IPC sender',
+    })
+
+    await expect(
+      callWithEvent(
+        {
+          sender: mocks.trustedWebContents,
+          senderFrame: null,
+        },
+        'app:getSettings'
+      )
+    ).resolves.toEqual({
+      success: false,
+      error: 'Untrusted IPC sender',
+    })
+  })
+
+  it('rejects untrusted frame origins even on the main webContents mainFrame', async () => {
+    const originalUrl = mocks.mainFrame.url
+    mocks.mainFrame.url = 'https://evil.example/phish.html'
+    try {
+      await expect(call('app:getSettings')).resolves.toEqual({
+        success: false,
+        error: 'Untrusted IPC sender',
+      })
+    } finally {
+      mocks.mainFrame.url = originalUrl
+    }
+  })
+
+  it('accepts explicitly trusted auxiliary window senders and revokes them on untrust', async () => {
+    const { trustIpcSender, untrustIpcSender } = await import('../../electron/ipc/register')
+    const auxFrame = { url: 'about:blank' }
+    const auxEvent = {
+      sender: { id: 42, mainFrame: auxFrame, isDestroyed: () => false },
+      senderFrame: auxFrame,
+    }
+    trustIpcSender(42)
+    try {
+      await expect(callWithEvent(auxEvent, 'app:getSettings')).resolves.toMatchObject({
+        success: true,
+      })
+    } finally {
+      untrustIpcSender(42)
+    }
+    await expect(callWithEvent(auxEvent, 'app:getSettings')).resolves.toEqual({
+      success: false,
+      error: 'Untrusted IPC sender',
+    })
   })
 })
 

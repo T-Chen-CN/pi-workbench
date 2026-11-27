@@ -200,13 +200,14 @@ function escapingRmTarget(cwd: string, root: string, command: string): string | 
 
 export function createTaskGuardExtension(context: TaskGuardContext): ExtensionFactory {
   return (pi) => {
-    pi.on('tool_call', async (event: any, extensionCtx: any) => {
+    pi.on('tool_call', async (event, extensionCtx) => {
       try {
-        const toolName = String(event?.toolName ?? '')
-        const input = (event?.input ?? event?.args ?? {}) as Record<string, unknown>
+        const eventRecord = event as unknown as Record<string, unknown>
+        const toolName = String(eventRecord?.toolName ?? '')
+        const input = (eventRecord?.input ?? eventRecord?.args ?? {}) as Record<string, unknown>
         const guarded =
           WRITE_TOOLS.has(toolName) || READ_TOOLS.has(toolName) || SHELL_TOOLS.has(toolName)
-        const cwd = String(extensionCtx?.cwd ?? '')
+        const cwd = String((extensionCtx as { cwd?: unknown } | undefined)?.cwd ?? '')
         if (!cwd) {
           if (!guarded) return undefined
           // fail-closed：读写/命令工具缺失 cwd 时无法校验工作树边界，必须拒绝

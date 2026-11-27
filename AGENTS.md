@@ -3,37 +3,40 @@
 > 给 AI 编码代理的项目说明。规范原文在 `docs/`，从这里按指针进入。
 
 **一句话**：本地优先的 Agent 原生开发工作台 —— Electron 桌面应用，Pi Agent 跑在主进程里，直接读写工作区、执行命令。
-**栈**：Electron 44 + React 19 + TypeScript 5.9 + Vite 5 + Zustand 4 + Tailwind 3 + Monaco 0.57 + Zod 4。**Node ≥ 24**（`node:sqlite`、构建脚本依赖）。
-**阶段**：本地 Agent 工作台（0.11.2）+ 云端 Agent（Pi 内核），已完成安全止血、性能瘦身与 Phase 2 架构重构（快照见 [STATUS](docs/progress/STATUS.md)，待办见 [BACKLOG](docs/progress/BACKLOG.md)）。
+**栈**：Electron 44 + React 19 + TypeScript 5.9 + Vite 5 + Zustand 5 + Tailwind 3 + Monaco 0.57 + Zod 4 + i18next + Playwright (`_electron`)。**Node ≥ 24**（`node:sqlite`、构建脚本依赖）。
+**阶段**：本地 Agent 工作台（0.11.2）+ 云端 Agent（Pi 内核），已完成安全止血、性能瘦身与 Phase 2 / Phase D 架构收敛（快照见 [STATUS](docs/progress/STATUS.md)，待办见 [BACKLOG](docs/progress/BACKLOG.md)）。
 
 ---
 
 ## 1. 命令
 
 ```bash
-npm run dev        # Vite + Electron（predev 会自动构建 pi-bridge 与主进程/preload）
-npm test           # Vitest 全量
+npm run dev           # Vite + Electron（predev 会自动构建 @pi-workbench/i18n、pi-bridge 与主进程/preload）
+npm test              # Vitest 全量（vitest.config.ts 直接将 pi-bridge 及子路径 alias 到 pi-bridge/src/*.ts）
 npx vitest run tests/<域>/<file>.test.ts   # 单个文件（加 -t "<名称>" 只跑一条）
-npm run lint       # ESLint（含 jsx-a11y、跨包边界、AST 色值护栏）
-npm run type-check # 全仓 7 份 tsconfig（src / tsconfig.node / electron / preload / pi-bridge / cloud / cloud-ui）
-npm run build      # 渲染层 + bridge + 主进程
+npm run test:e2e:smoke # Playwright _electron 真实窗口冒烟（需先 npm run build，可用 PI_E2E_EXECUTABLE 指向打包产物）
+npm run lint          # eslint . --max-warnings 0（含 jsx-a11y、no-explicit-any、no-floating-promises、跨包/进程边界、AST 色值护栏）
+npm run type-check    # 全仓 9 份 tsconfig（i18n / src / tsconfig.node / electron / preload / pi-bridge / ui / cloud / cloud-ui）
+npm run build         # @pi-workbench/i18n + 渲染层 + pi-bridge + 主进程（esbuild 打包 preload.cjs）
 ```
 
 - 只能用 **npm**（`package-lock.json` 是唯一锁文件）。
 - 改 `tailwind.config.js`（新增颜色 / 工具类）后**必须重启 `npm run dev`**：Tailwind 只在服务器启动时读配置，CSS HMR 不会生成新类。
-- **不要**提交 `dist/` `dist-electron/` `pi-bridge/dist/` `apps/cloud/web-dist/` `release/`：均已 gitignore，由命令重建。
+- **不要**提交 `dist/` `dist-electron/` `pi-bridge/dist/` `packages/i18n/dist/` `apps/cloud/web-dist/` `release/`：均已 gitignore，由命令重建。
 
 ## 2. 仓库地图
 
 | 位置 | 规则 |
 | --- | --- |
-| `electron/` | 主进程。**IPC 一律写在 `electron/ipc/<域>.ts`，用 `handleIpc()` 注册**，高危入参经 `electron/ipc/schemas.ts`（Zod）校验；重 CPU 非 Agent 解析（`documents/`、`repo-map.ts`）通过 `worker-runner.ts` 卸载到 `worker_threads` |
+| `electron/` | 主进程。**IPC 一律写在 `electron/ipc/<域>.ts`，用 `handleIpc()` 注册**；单一 IPC 契约在 `electron/ipc/contract.ts`，高危入参经 `electron/ipc/schemas.ts`（Zod）校验；`scripts/build-preload.mjs` 用 esbuild 打包 `preload.cts` → `dist-electron/preload.cjs`；重 CPU 解析（`documents/`、`repo-map.ts`）卸载到 `worker_threads` |
 | `electron/ipc/register.ts` | `handleIpc` + `isTrustedIpcSender`：只接受主窗口主框架，ready 之后 fail-closed（辅助窗口为纯 DOM Portal，不继承 `preload`） |
-| `src/` | 渲染进程分层：`components/{chat,cloud,editor,files,git,panels,repo-map,settings,ui,workspace}/`（按业务域分子目录）· `store/`（一域一个 Zustand store）· `hooks/` · `utils/` · `workspace/` · `panelHost/` · `theme/` · `pdf/` · `api/`（IPC 封装 + 仅 DEV 回退 mock） |
-| `pi-bridge/` | 独立的 Agent 桥接包（`AgentManager` 及拆分出的 `agent-catalog` / `agent-session-events` / `agent-title-service` / `session-view` 等），有自己的 `package.json` / `tsconfig`；改完要 `npm run build:bridge` |
-| `packages/cloud-ui/` | 桌面端与云端 Web 共享 UI workspace（`@pi-workbench/cloud-ui`：类型、WS 帧归并器、Paper & Ink 零桌面 store 原语与共享卡片/弹窗），ESLint 强制禁止引入桌面 store / `translations.ts` / Electron |
-| `apps/cloud/` | 云端服务（`@pi-workbench/cloud`）：控制面 + 两条 WS + 单会话 + `node:sqlite` (WAL) 持久化 + Web 控制台源码（`web-src/` → `web-dist/`）；`npm run build:cloud`；协议帧与 Zod 校验在 `pi-bridge/src/cloud-protocol.ts`；推送 `main` 由 `cloud-release.yml` 自动备包，**上线需按需手动跑服务器 `/opt/pi-cloud/update.sh`**，见 [cloud-agent §5](docs/agent/cloud-agent.md#5-部署与主动更新-sopoptpi-cloud) |
-| `tests/` | 按域分子目录：`tests/{agent,cloud,electron,git,ui,utils}/`；`tests/ui/design-system.test.ts` 与 `npm run lint` 是强制门槛 |
+| `src/` | 渲染进程分层：`components/{chat,cloud,editor,files,git,panels,repo-map,settings,ui,workspace}/` · `store/`（一域一个 Zustand store）· `hooks/` · `utils/` · `workspace/` · `panelHost/` · `theme/` · `pdf/` · `api/`（IPC 封装 + 仅 DEV 回退 mock） |
+| `packages/ui/` | 桌面端与云端 Web 共享 Paper & Ink UI 基础包（`@pi-workbench/ui`：`primitives.tsx`、`patterns.tsx`、`BrandSeal`、`StreamdownView`、`StreamingTranscript`、`chatScroll`、`shikiHighlighter`），零桌面 store / Electron 依赖 |
+| `packages/i18n/` | 类型安全多语言资源包（`@pi-workbench/i18n`：i18next 中英文词条与错误本地化），供渲染进程、Electron 主进程与云端 Web 共用；改完需 `npm run build:i18n` |
+| `packages/cloud-ui/` | 桌面端与云端 Web 共享云端业务 UI（`@pi-workbench/cloud-ui`：类型、WS 帧归并器、云端卡片/弹窗，基于 `@pi-workbench/ui` 与 `@pi-workbench/i18n`），ESLint 强制禁止引入桌面 `src/` / Zustand / Electron |
+| `pi-bridge/` | 独立的 Agent 桥接包（`AgentManager`、`SessionController`、`SessionRepository`、`session-view` 及 `agent-catalog` / `agent-session-events` / `agent-title-service` 等），提供子路径导出（`pi-bridge`、`pi-bridge/protocol`、`pi-bridge/presets`、`pi-bridge/images`、`pi-bridge/atomic-json`）；改完需 `npm run build:bridge` |
+| `apps/cloud/` | 云端服务（`@pi-workbench/cloud`）：控制面 + 两条 WS + 单会话 + `node:sqlite` (WAL) + Web 控制台（`web-src/` → `web-dist/`）；`npm run build:cloud`；协议帧与 Zod 校验在 `pi-bridge/src/cloud-protocol.ts`；推送 `main` 由 `cloud-release.yml` 自动备包，**上线需按需手动跑 `/opt/pi-cloud/update.sh`**，见 [cloud-agent §5](docs/agent/cloud-agent.md#5-部署与主动更新-sopoptpi-cloud) |
+| `tests/` | 按域分子目录：`tests/{agent,cloud,electron,git,ui,utils}/` + `tests/e2e/electron-smoke.mjs`；`tests/ui/design-system.test.ts` 与 `npm run lint`（`--max-warnings 0`）是强制门槛 |
 | `docs/` | 规范原文，`docs/README.md` 是唯一索引 |
 | `electron/cloud/` | 终端执行器（device agent / 工单 worktree / 工具守卫），只跑在桌面端主进程 |
 
@@ -42,11 +45,11 @@ npm run build      # 渲染层 + bridge + 主进程
 ## 3. 边界：Never / Ask first / Always
 
 **Never**
-- 渲染进程直接碰 Node / fs（`nodeIntegration` 关闭，ESLint 禁止引入 `electron` / `node:*`，只能走 `window.electronAPI`）。
+- 渲染进程直接碰 Node / fs（`nodeIntegration` 关闭，ESLint 禁止引入 `electron` / `node:*`，仅 `src/types/electron.d.ts` 与 `src/api/index.ts` 允许引入 `../../electron/ipc/contract`）。
 - 绕过 `electron/app-paths.ts` 自行拼装数据目录，或把运行期数据散落到 `~/.pi` / `%LOCALAPPDATA%` 等第三处目录（全机严格两目录：程序安装目录 + 唯一数据目录 `getAppDir()`；仅含 `portable` 标记的便携版退回单目录）。
 - API Key 明文进仓库、配置、日志或工作区（只允许 `enc:` + safeStorage）。
-- 引入 Tauri / Redux / CSS Modules / Webpack；用 emoji 当图标；写 `gray-*` `blue-*` `red-*` 调色板类或 `dark:` 变体。
-- 在组件里硬编码十六进制色值、任意字号、`uppercase`、`tracking-[…]`、`leading-[…]`。
+- 引入 Tauri / Redux / CSS Modules / Webpack；用 emoji 当图标；写任何 Tailwind 默认调色板类（`slate-*` / `gray-*` / `blue-*` / `red-*` 等）或 `dark:` 变体。
+- 在组件或样式常量里硬编码十六进制色值、任意字号、`uppercase`、`tracking-[…]`、`leading-[…]`；在非豁免源码里写 `any` 或未处理的浮空 Promise。
 
 **Ask first**
 - 改 [DESIGN_SYSTEM](docs/design/DESIGN_SYSTEM.md)（设计唯一事实源，新增例外必须先确认）。
@@ -54,9 +57,9 @@ npm run build      # 渲染层 + bridge + 主进程
 - 改会话记录格式、`session-git.json` 格式、IPC 频道名（都有落盘或跨进程兼容约束）。
 
 **Always**
-- 新增 IPC 四步：`electron/ipc/<域>.ts` 用 `handleIpc`（并在 `electron/ipc/schemas.ts` 补 Zod 校验）→ `electron/preload.cts` 暴露 → `src/types/electron.d.ts` 补类型 → `src/api/index.ts` 封装（同时补 DEV mock）。
+- 新增 IPC：先在 `electron/ipc/contract.ts` 登记契约（并在 `electron/ipc/schemas.ts` 补 Zod 校验）→ `electron/ipc/<域>.ts` 用 `handleIpc` 注册 → `electron/preload.cts` 暴露 → `src/types/electron.d.ts` / `src/api/index.ts` 封装（含 DEV mock）。
 - 文件写 / 删 / 改只允许发生在受信任工作区与 `{appDir}/cache/`；校验用 `lstat + readlink + realpath` + `path.relative`（`electron/workspace-trust.ts`）。
-- 落盘 JSON 走 `electron/atomic-json.ts` 的原子写（临时文件 + fsync + rename，旧文件留 `.bak`）；高频小文件（`cache/drafts`）用异步版 `writeJsonAtomicAsync` 且不留 `.bak`，**不要自己 `writeFile` 覆盖**这些状态文件。
+- 落盘 JSON 走 `electron/atomic-json.ts`（复导出 `pi-bridge/atomic-json`）原子写（临时文件 + fsync + rename，旧文件留 `.bak`）；高频小文件（`cache/drafts`）用异步版 `writeJsonAtomicAsync` 且不留 `.bak`，**不要自己 `writeFile` 覆盖**这些状态文件。
 - 状态更新不可变；按工作区隔离的状态用 `xxxStoreFor(workspacePath)` 工厂，不要放全局单例。
 
 ## 4. 架构铁律（动手前读对应文档）
@@ -76,7 +79,7 @@ npm run build      # 渲染层 + bridge + 主进程
 ## 5. 交互约定
 
 - 文件树单击即打开（无双击确认）；自动保存 2 秒防抖；常规 Toast 3 秒自动消失，错误 Toast（`role="alert"`）默认 8 秒自动消失并在鼠标悬停 / 键盘聚焦时暂停倒计时。
-- 聊天贴底：距底 < 64px 才跟随流式输出；主动发送 / 重试 / 编辑重发 / 插话一律恢复跟随并贴到真实底部（`src/hooks/chatScroll.ts`）。
+- 聊天贴底：距底 < 64px 才跟随流式输出；主动发送 / 重试 / 编辑重发 / 插话一律恢复跟随并贴到真实底部（`packages/ui/src/chatScroll.ts`）。
 - 终端开关、窗口句柄、面板宿主属于运行期状态，**不落盘**；面板宽度按用户偏好持久化；会话的权限模式与授权、结构化计划、分支选中叶子会随会话落盘（`data/agent/session-extras/`）。
 - 注释只写「怎么实现 + 什么约束」（用「必须 / 否则」表述），不写「以前怎么错」；演进史交给 `git log`。
 
@@ -84,12 +87,12 @@ npm run build      # 渲染层 + bridge + 主进程
 
 | 改动范围 | 必须跑 |
 | --- | --- |
-| 日常小功能 / 局部修复（`src/` / `apps/cloud/web-src/`） | 相关单测（或 `npx vitest related <改动文件>`）+ `npx eslint <改动文件>` + `npm run type-check` |
+| 日常小功能 / 局部修复（`src/` / `apps/cloud/web-src/` / `packages/*`） | 相关单测（或 `npx vitest related <改动文件>`）+ `npx eslint --max-warnings 0 <改动文件>` + `npm run type-check` |
 | `electron/` | `npm run type-check` + 相关 `tests/electron/*.test.ts` / `tests/git/*.test.ts` |
 | `pi-bridge/` | `npm run build:bridge` + 相关 `tests/agent/*.test.ts` |
-| UI / 样式 | `tests/ui/design-system.test.ts` + `npx eslint <改动文件>`（`jsx-a11y` + AST 色值 + 跨包边界） |
-| 公共底座 / 依赖升级 / 跨模块重构 / 发版前 | 全量 `npm test` + `npm run lint` + `npm run build` + `npm run build:cloud` |
-| 打包 / 更新 / NSIS | `npx electron-builder --win --dir --publish never` |
+| UI / 样式 | `npx vitest run tests/ui/design-system.test.ts` + `npx eslint --max-warnings 0 <改动文件>` |
+| 公共底座 / 依赖升级 / 跨模块重构 / 发版前 | 全量 `npm test` + `npm run lint` + `npm run build` + `npm run build:cloud` + `npm run test:e2e:smoke` |
+| 打包 / 更新 / NSIS | `npx electron-builder --win --dir --publish never` + `PI_E2E_EXECUTABLE="release/win-unpacked/Pi Workbench.exe" npm run test:e2e:smoke` |
 
 渲染层测试用 `// @vitest-environment jsdom`；Monaco / xterm 用 `vi.mock` 替身。改交互后补或改用例 —— 测试是这类改动的唯一回归网。
 
@@ -140,4 +143,4 @@ npm run build      # 渲染层 + bridge + 主进程
 
 ---
 
-**维护**：目标 ≤ 160 行。能从代码、`package.json`、`docs/` 读出来的，写指针不写副本。
+**维护**：目标 ≤ 170 行。能从代码、`package.json`、`docs/` 读出来的，写指针不写副本。

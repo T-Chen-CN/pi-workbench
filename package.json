@@ -33,7 +33,7 @@
     "build": "npm run build:i18n && npm run build:renderer && npm run build:bridge && npm run build:main",
     "build:i18n": "npm run build --workspace @pi-workbench/i18n",
     "build:renderer": "cross-env NODE_OPTIONS=--max-old-space-size=4096 vite build",
-    "build:main": "tsc -p electron/tsconfig.json && tsc -p electron/tsconfig.preload.json",
+    "build:main": "tsc -p electron/tsconfig.json && node scripts/build-preload.mjs",
     "build:bridge": "cd pi-bridge && npm run build",
     "build:cloud-web": "npm run build:i18n && cross-env NODE_OPTIONS=--max-old-space-size=4096 vite build --config vite.config.cloud-web.ts",
     "build:cloud": "npm run build:cloud-web && npm run build --workspace @pi-workbench/cloud",
@@ -47,8 +47,9 @@
     "package:linux": "npm run build && electron-builder --linux",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "eslint .",
-    "format": "prettier --write \"src/**/*.{ts,tsx}\" \"electron/**/*.{ts,cts}\" \"pi-bridge/src/**/*.ts\" \"tests/**/*.ts\" \"*.{ts,js,json,md}\""
+    "test:e2e:smoke": "node tests/e2e/electron-smoke.mjs",
+    "lint": "eslint . --max-warnings 0",
+    "format": "prettier --write \"src/**/*.{ts,tsx}\" \"packages/{ui,i18n,cloud-ui}/src/**/*.{ts,tsx}\" \"apps/cloud/**/*.{ts,tsx}\" \"electron/**/*.{ts,cts}\" \"pi-bridge/src/**/*.ts\" \"tests/**/*.{ts,tsx}\" \"scripts/**/*.{ts,mjs}\" \"*.{ts,js,json,md}\""
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^1.3.0",

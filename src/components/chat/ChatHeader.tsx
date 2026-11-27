@@ -1,6 +1,7 @@
 /** 聊天面板头部与会话标签栏（窄订阅 + React.memo） */
 
 import React, { useCallback } from 'react'
+import type { TranslationKey, TranslationParams } from '@pi-workbench/i18n'
 import { useSessionStore } from '../../store/sessionStore'
 import { useI18nStore } from '../../store/i18nStore'
 import { EMPTY_SESSIONS } from '../../utils/chatPanelShared'
@@ -12,7 +13,7 @@ export interface ChatHeaderProps {
   onCollapse?: () => void
   collapseButtonRef?: React.Ref<HTMLButtonElement>
   panelId?: string
-  t?: (key: any) => string
+  t?: (key: TranslationKey, params?: TranslationParams) => string
   initialized: boolean
   workspacePath: string
   /** 可选：不传时自动窄订阅 sessionStore 中当前工作区的会话列表 */

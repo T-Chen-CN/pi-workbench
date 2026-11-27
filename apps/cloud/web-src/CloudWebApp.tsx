@@ -131,7 +131,7 @@ const SetupView: React.FC<{
   language: Language
   onToggleLanguage: () => void
   onDone: () => void
-  request: <T = any>(
+  request: <T = unknown>(
     method: string,
     path: string,
     body?: unknown
@@ -232,7 +232,7 @@ const LoginView: React.FC<{
   onToggleLanguage: () => void
   notice: string
   onLoggedIn: (me: WebMe) => void
-  request: <T = any>(
+  request: <T = unknown>(
     method: string,
     path: string,
     body?: unknown
@@ -413,7 +413,7 @@ export const CloudWebApp: React.FC = () => {
   }, [showExpired])
 
   const request = useCallback(
-    <T = any,>(method: string, path: string, body?: unknown) =>
+    <T = unknown,>(method: string, path: string, body?: unknown) =>
       apiRequest<T>(method, path, body, () => {
         void handleUnauthorized()
       }),
@@ -550,14 +550,19 @@ export const CloudWebApp: React.FC = () => {
 
     socket.addEventListener('message', (event) => {
       if (wsRef.current !== socket) return
-      let frame: any
+      let frame: unknown
       try {
-        frame = JSON.parse(String(event.data))
+        frame = JSON.parse(String(event.data)) as unknown
       } catch {
         return
       }
-      if (frame?.type === 'error' && frame.message) {
-        setBannerError(String(frame.message))
+      if (
+        frame &&
+        typeof frame === 'object' &&
+        (frame as Record<string, unknown>).type === 'error' &&
+        (frame as Record<string, unknown>).message
+      ) {
+        setBannerError(String((frame as Record<string, unknown>).message))
       }
       // 状态更新器保持纯函数（不在 updater 内发 WS 帧，避免 React 19 StrictMode 双调导致重复 mark_read）；
       // 前台可见会话页的已读回执统一交给下方的 visibility/unread effect 在提交后上报。

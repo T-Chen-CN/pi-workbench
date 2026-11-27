@@ -314,8 +314,9 @@ export const useCloudStore = create<CloudState>((set, get) => ({
   },
 
   applyFrame: (raw) => {
-    const frame = raw as any
-    if (!frame || typeof frame !== 'object' || frame.v !== CLOUD_PROTOCOL_VERSION) return
+    if (!raw || typeof raw !== 'object') return
+    const frame = raw as Record<string, unknown>
+    if (frame.v !== CLOUD_PROTOCOL_VERSION) return
     if (frame.type === 'ack') {
       set((state) => ({ lastSeq: Math.max(state.lastSeq, Number(frame.seq ?? 0)) }))
       return

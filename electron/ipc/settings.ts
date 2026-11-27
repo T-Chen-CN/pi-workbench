@@ -29,21 +29,41 @@ const DEFAULT_SETTINGS = {
   autoRefreshCatalog: true,
 }
 
-let settingsCache: Record<string, any> = {}
+export interface AppSettingsRecord {
+  language?: string
+  theme?: string
+  autoSave?: boolean
+  autoSaveDelay?: number
+  runWhileBusy?: string
+  permissionLevel?: string
+  explorerSortBy?: string
+  explorerFoldersFirst?: boolean
+  explorerSortReverse?: boolean
+  closeToTray?: boolean
+  autoInstallWorktreeDeps?: boolean
+  useSystemProxy?: boolean
+  autoRefreshCatalog?: boolean
+  notifications?: unknown
+  recentWorkspaces?: unknown
+  panelWidths?: Record<string, unknown>
+  [key: string]: unknown
+}
 
-export function getAppSettingsCache(): Record<string, any> {
+let settingsCache: AppSettingsRecord = {}
+
+export function getAppSettingsCache(): AppSettingsRecord {
   return settingsCache
 }
 
-export function setAppSettingsCache(next: Record<string, any>): void {
+export function setAppSettingsCache(next: AppSettingsRecord): void {
   settingsCache = next
 }
 
-export function updateAppSettingsCache(patch: Record<string, any>): void {
+export function updateAppSettingsCache(patch: AppSettingsRecord): void {
   settingsCache = { ...settingsCache, ...patch }
 }
 
-export async function loadSettingsFile(): Promise<any> {
+export async function loadSettingsFile(): Promise<AppSettingsRecord> {
   const settingsPath = path.join(getAppDir(), 'config', 'settings.json')
   const result = readJsonWithBackup<Record<string, unknown>>(settingsPath)
   if (result.data && typeof result.data === 'object' && !Array.isArray(result.data)) {
@@ -58,7 +78,7 @@ export async function loadSettingsFile(): Promise<any> {
   return { ...DEFAULT_SETTINGS }
 }
 
-export async function saveSettingsFile(settings: any): Promise<void> {
+export async function saveSettingsFile(settings: AppSettingsRecord): Promise<void> {
   const settingsPath = path.join(getAppDir(), 'config', 'settings.json')
   await writeJsonAtomic(settingsPath, settings)
 }

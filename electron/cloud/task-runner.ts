@@ -192,6 +192,68 @@ interface RunningToolState {
   reported: boolean
 }
 
+interface TaskCreateSessionResult {
+  success?: boolean
+  error?: string
+  session?: { id?: string }
+  sessionId?: string
+  id?: string
+}
+
+interface TaskChatOutcome {
+  success?: boolean
+  error?: string
+  response?: string
+}
+
+interface TaskTraceEvent {
+  type?: string
+  toolCallId?: string
+  toolName?: string
+  status?: string
+  filePath?: string
+  args?: unknown
+  argsSummary?: string
+  resultPreview?: string
+}
+
+interface AskCloudToolRegistrar {
+  registerTool: (definition: {
+    name: string
+    description: string
+    parameters: Record<string, unknown>
+    execute: (
+      toolCallId: string,
+      params: { question?: string },
+      signal?: AbortSignal,
+      onUpdate?: unknown,
+      ctx?: { sessionManager?: { getSessionId?: () => string }; cwd?: string }
+    ) => Promise<{
+      content: Array<{ type: 'text'; text: string }>
+      isError: boolean
+      details: undefined
+    }>
+  }) => void
+}
+
+interface TaskAgentManager {
+  initialize: (options: Record<string, unknown>) => Promise<{ success?: boolean; error?: string }>
+  createSession: (
+    cwd: string,
+    options?: { permission?: { mode: 'auto'; grants: never[] } }
+  ) => Promise<TaskCreateSessionResult | undefined>
+  closeSession?: (sessionId: string) => Promise<unknown>
+  subscribeTrace?: (
+    sessionId: string,
+    listener: (event: TaskTraceEvent) => void
+  ) => Promise<(() => void) | undefined> | (() => void) | undefined
+  chat: (sessionId: string, prompt: string) => Promise<TaskChatOutcome | undefined>
+  abort?: (sessionId: string) => Promise<unknown>
+  isSessionBusy?: (sessionId: string) => boolean
+  steer?: (sessionId: string, text: string) => Promise<unknown>
+  dispose?: () => Promise<unknown>
+}
+
 interface ActiveTask {
   id: string
   spec: CloudTaskSpec
@@ -200,7 +262,7 @@ interface ActiveTask {
   worktreePath: string
   sessionId: string
   /** 创建该工单会话时的 AgentManager 实例，避免热切配置时提前销毁仍在使用的旧 manager */
-  manager?: any
+  manager?: TaskAgentManager
   /** 同一工单的轮次串行链（初轮与 ask_cloud 回答续轮），防止并发调用 manager.chat */
   turnChain?: Promise<void>
   status: CloudTaskStatus
@@ -231,10 +293,10 @@ const UNIT_BINDING_PREFIX = 'cloud:'
 
 export class CloudTaskRunner {
   private deps: CloudTaskRunnerDeps
-  private manager: any = null
+  private manager: TaskAgentManager | null = null
   private managerKey = ''
   /** 已替换但仍有活跃/waiting_human 工单引用的旧 AgentManager，等引用归零后延迟销毁 */
-  private retiredManagers = new Set<any>()
+  private retiredManagers = new Set<TaskAgentManager>()
   private active = new Map<string, ActiveTask>()
   /** 正在准备阶段（建 worktree / 建会话）的工单：防并发 start 与 closeUnit 竞态 */
   private starting = new Map<string, string>()
@@ -333,13 +395,13 @@ export class CloudTaskRunner {
     if (changed) await this.persistTasks()
   }
 
-  private taskManager(task: ActiveTask): any {
+  private taskManager(task: ActiveTask): TaskAgentManager | null {
     return task.manager ?? this.manager
   }
 
   private disposeUnusedRetiredManagers(): void {
     if (this.retiredManagers.size === 0) return
-    const inUse = new Set<any>()
+    const inUse = new Set<TaskAgentManager>()
     for (const activeTask of this.active.values()) {
       if (activeTask.manager) inUse.add(activeTask.manager)
     }
@@ -437,7 +499,7 @@ export class CloudTaskRunner {
   }
 
   /** 复用用户当前 API 配置，按需建一个专属 AgentManager（独立 agentDir） */
-  private async ensureManager(): Promise<any> {
+  private async ensureManager(): Promise<TaskAgentManager> {
     const config = await this.deps.getApiConfig()
     if (!config || !config.modelId) {
       throw new Error('API configuration is missing; configure the model in Settings first')
@@ -446,7 +508,9 @@ export class CloudTaskRunner {
     const key = `${config.providerId}|${config.modelId}|${config.fingerprint}|${serializeApiOverrides(config.overrides)}`
     if (this.manager && this.managerKey === key) return this.manager
 
-    const { AgentManager } = await import(getBridgeEntryUrl())
+    const { AgentManager } = (await import(getBridgeEntryUrl())) as {
+      AgentManager: new () => TaskAgentManager
+    }
     const agentDir = path.join(this.deps.dataDir, 'agent')
     await fs.mkdir(agentDir, { recursive: true })
     await ensureTaskAgentSettings(agentDir)
@@ -498,7 +562,7 @@ export class CloudTaskRunner {
   }
 
   /** `ask_cloud`：把问题抛给用户，然后结束本轮等待回答（不做阻塞等待） */
-  private createAskCloudExtension(): (pi: any) => void {
+  private createAskCloudExtension(): (pi: AskCloudToolRegistrar) => void {
     return (pi) => {
       pi.registerTool({
         name: 'ask_cloud',
@@ -661,7 +725,7 @@ export class CloudTaskRunner {
       const unit = worktree.record
       this.deps.onWorktree(taskId, spec.workUnitId, unit.worktreePath, unit.branch ?? undefined)
 
-      let manager: any
+      let manager: TaskAgentManager
       try {
         manager = await this.ensureManager()
       } catch (error) {
@@ -766,7 +830,9 @@ export class CloudTaskRunner {
       this.setStatus(taskId, 'assigned')
 
       try {
-        const unsub = await manager.subscribeTrace?.(sessionId, (event: any) => this.onTrace(task, event))
+        const unsub = await manager.subscribeTrace?.(sessionId, (event: TaskTraceEvent) =>
+          this.onTrace(task, event)
+        )
         if (typeof unsub === 'function') task.unsubscribeTrace = unsub
       } catch (error) {
         this.deps.logger.warn('[Cloud Task] failed to subscribe trace:', error)
@@ -816,7 +882,7 @@ export class CloudTaskRunner {
   }
 
   /** 配置刚改过时在当前 startChain 内延迟 1s 重试一次 ensureManager，绝不绕过串行链 */
-  private async retryAfterConfigRefresh(taskId: string): Promise<any | null> {
+  private async retryAfterConfigRefresh(taskId: string): Promise<TaskAgentManager | null> {
     await new Promise((resolve) => setTimeout(resolve, 1_000))
     if (this.disposed || this.cancelRequested.has(taskId)) return null
     try {
@@ -828,7 +894,12 @@ export class CloudTaskRunner {
 
   private async runTurn(task: ActiveTask, spec: CloudTaskSpec, prompt: string): Promise<void> {
     try {
-      const outcome = await this.taskManager(task).chat(task.sessionId, prompt)
+      const manager = this.taskManager(task)
+      if (!manager) {
+        await this.finishFailed(task, 'Task agent manager is not initialized')
+        return
+      }
+      const outcome = await manager.chat(task.sessionId, prompt)
       if (this.cancelRequested.has(task.id)) {
         this.cancelRequested.delete(task.id)
         return
@@ -891,7 +962,7 @@ export class CloudTaskRunner {
     task.runningTools.clear()
   }
 
-  private onTrace(task: ActiveTask, event: any): void {
+  private onTrace(task: ActiveTask, event: TaskTraceEvent | null | undefined): void {
     if (!event || this.disposed) return
     try {
       const toolKey = String(event.toolCallId ?? event.toolName ?? '')
@@ -969,7 +1040,11 @@ export class CloudTaskRunner {
     this.emitMilestone(task.id, milestone)
   }
 
-  private async finishDone(task: ActiveTask, spec: CloudTaskSpec, outcome: any): Promise<void> {
+  private async finishDone(
+    task: ActiveTask,
+    spec: CloudTaskSpec,
+    outcome: TaskChatOutcome | undefined
+  ): Promise<void> {
     const changedFiles = await this.collectChangedFiles(task)
     // F-19a：干净 = 什么都没留下来，服务端可以自动回收（脏树则保留等用户）
     const worktreeClean = await this.isWorktreeClean(task.worktreePath)
@@ -1233,7 +1308,12 @@ export class CloudTaskRunner {
     this.setStatus(task.id, 'running')
     this.startTaskWatchdogs(task)
     try {
-      const outcome = await this.taskManager(task).chat(
+      const manager = this.taskManager(task)
+      if (!manager) {
+        await this.finishFailed(task, 'Task agent manager is not initialized')
+        return false
+      }
+      const outcome = await manager.chat(
         task.sessionId,
         `用户的回答（针对上一个问题）：\n\n${text.trim()}\n\n请继续执行工单。`
       )
@@ -1264,6 +1344,7 @@ export class CloudTaskRunner {
     const task = this.active.get(taskId)
     if (!task) return false
     const manager = this.taskManager(task)
+    if (!manager) return false
     const preview = redactSecrets(text).trim().replace(/\s+/g, ' ').slice(0, 80)
     if (preview) {
       this.emitMilestone(task.id, {
@@ -1317,7 +1398,7 @@ export class CloudTaskRunner {
     }
     this.active.clear()
     this.cancelRequested.clear()
-    const managersToDispose = new Set<any>(this.retiredManagers)
+    const managersToDispose = new Set<TaskAgentManager>(this.retiredManagers)
     if (this.manager) managersToDispose.add(this.manager)
     this.retiredManagers.clear()
     this.manager = null
@@ -1401,7 +1482,7 @@ function parsePorcelainChangedFiles(output: string): CloudChangedFile[] {
  * 优先结构化字段与已知 JSON 路径键，其次按 `summarizeToolArgs` 的 `<path> · <元信息>` 切分，
  * 避免用粗正则误把 `src/foo.bar/baz.ts` 中的带点目录段 `foo.bar` 当成独立改动文件。
  */
-function extractWriteOrEditPath(event: any): string | null {
+function extractWriteOrEditPath(event: TaskTraceEvent | null | undefined): string | null {
   if (typeof event?.filePath === 'string' && event.filePath.trim()) {
     return event.filePath.trim()
   }

@@ -988,7 +988,7 @@ app.whenReady().then(async () => {
   })
 
   // 启动页要尽早出现：只读设置（主题与语言）就建窗，其余初始化与页面加载并行。
-  let startupSettings: Record<string, any> = {}
+  let startupSettings: Record<string, unknown> = {}
   try {
     startupSettings = await loadSettingsFile()
   } catch (error) {
@@ -1114,6 +1114,8 @@ app.whenReady().then(async () => {
   setInterval(() => {
     void checkForUpdates()
   }, UPDATE_CHECK_INTERVAL_MS)
+}).catch((error) => {
+  console.error('[Main] Startup failed:', error)
 })
 
 /** 从托盘 / 第二实例 / Dock 唤回主窗口：还原尺寸、显示并聚焦 */

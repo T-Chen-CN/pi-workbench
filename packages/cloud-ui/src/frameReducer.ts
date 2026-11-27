@@ -26,6 +26,12 @@ function fallbackMessageId(now: number): string {
   return `m-${now.toString(36)}-${Math.random().toString(36).slice(2, 7)}`
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+}
+
 export function normalizeCloudChangedFiles(raw: unknown): CloudChangedFileRow[] {
   if (!Array.isArray(raw)) return []
   return raw
@@ -50,77 +56,96 @@ export function normalizeCloudSecretHits(raw: unknown): CloudSecretHitRow[] {
     .filter((item) => Boolean(item.path) && item.line > 0 && Boolean(item.kind))
 }
 
-export function hydrateCloudMessage(raw: any, now = Date.now()): CloudChatRow {
+export function hydrateCloudMessage(raw: unknown, now = Date.now()): CloudChatRow {
+  const obj = asRecord(raw) ?? {}
   return {
-    id: String(raw?.id ?? fallbackMessageId(now)),
-    role: raw?.role === 'user' ? 'user' : 'assistant',
-    text: String(raw?.text ?? ''),
-    at: Number(raw?.at ?? now),
-    streaming: Boolean(raw?.streaming),
-    ...(typeof raw?.thinking === 'string' && raw.thinking ? { thinking: raw.thinking } : {}),
-    ...(raw?.thinkingRedacted ? { thinkingRedacted: true } : {}),
-    ...(typeof raw?.thinkingDurationMs === 'number'
-      ? { thinkingDurationMs: raw.thinkingDurationMs }
+    id: String(obj.id ?? fallbackMessageId(now)),
+    role: obj.role === 'user' ? 'user' : 'assistant',
+    text: String(obj.text ?? ''),
+    at: Number(obj.at ?? now),
+    streaming: Boolean(obj.streaming),
+    ...(typeof obj.thinking === 'string' && obj.thinking ? { thinking: obj.thinking } : {}),
+    ...(obj.thinkingRedacted ? { thinkingRedacted: true } : {}),
+    ...(typeof obj.thinkingDurationMs === 'number'
+      ? { thinkingDurationMs: obj.thinkingDurationMs }
       : {}),
-    traces: Array.isArray(raw?.traces)
-      ? raw.traces.map((trace: any) => ({
-          id: String(trace?.id ?? ''),
-          toolName: String(trace?.toolName ?? 'tool'),
-          summary: String(trace?.summary ?? ''),
-          status:
-            trace?.status === 'error'
-              ? 'error'
-              : trace?.status === 'running'
-                ? 'running'
-                : 'ok',
-          ...(typeof trace?.durationMs === 'number' ? { durationMs: trace.durationMs } : {}),
-          ...(typeof trace?.resultPreview === 'string'
-            ? { resultPreview: trace.resultPreview }
-            : {}),
-        }))
+    traces: Array.isArray(obj.traces)
+      ? obj.traces.map((item) => {
+          const trace = asRecord(item) ?? {}
+          return {
+            id: String(trace.id ?? ''),
+            toolName: String(trace.toolName ?? 'tool'),
+            summary: String(trace.summary ?? ''),
+            status:
+              trace.status === 'error'
+                ? 'error'
+                : trace.status === 'running'
+                  ? 'running'
+                  : 'ok',
+            ...(typeof trace.durationMs === 'number' ? { durationMs: trace.durationMs } : {}),
+            ...(typeof trace.resultPreview === 'string'
+              ? { resultPreview: trace.resultPreview }
+              : {}),
+          }
+        })
       : [],
-    error: raw?.error,
+    error: typeof obj.error === 'string' ? obj.error : undefined,
   }
 }
 
 /** 兼容服务端原始 CloudTaskSnapshot（spec/progress）与已规整的 CloudTaskRow */
-export function normalizeCloudTask(raw: any, now = Date.now()): CloudTaskRow | null {
-  if (!raw || typeof raw !== 'object') return null
-  const id = String(raw.id ?? '')
+export function normalizeCloudTask(raw: unknown, now = Date.now()): CloudTaskRow | null {
+  const obj = asRecord(raw)
+  if (!obj) return null
+  const id = String(obj.id ?? '')
   if (!id) return null
-  const spec = raw.spec ?? {}
+  const spec = asRecord(obj.spec) ?? {}
+  const specRepo = asRecord(spec.repo) ?? {}
+  const resultObj = asRecord(obj.result)
+  const progressObj = asRecord(obj.progress)
+  const questionObj = asRecord(obj.question)
   const changedFiles = normalizeCloudChangedFiles(
-    raw.changedFiles ?? raw.result?.changedFiles ?? raw.progress?.changedFiles
+    obj.changedFiles ?? resultObj?.changedFiles ?? progressObj?.changedFiles
   )
   const secretHits = normalizeCloudSecretHits(
-    raw.secretHits ?? raw.result?.secretHits ?? raw.progress?.secretHits
+    obj.secretHits ?? resultObj?.secretHits ?? progressObj?.secretHits
   )
   const summary =
-    raw.result?.summary ?? (raw.status === 'done' ? raw.progress?.summary : undefined)
+    resultObj?.summary ?? (obj.status === 'done' ? progressObj?.summary : undefined)
   const question =
-    raw.question && typeof raw.question.text === 'string'
+    questionObj && typeof questionObj.text === 'string'
       ? {
-          id: String(raw.question.id ?? ''),
-          text: String(raw.question.text),
-          at: Number(raw.question.at ?? now),
+          id: String(questionObj.id ?? ''),
+          text: String(questionObj.text),
+          at: Number(questionObj.at ?? now),
         }
       : undefined
   return {
     id,
-    title: String(spec.title ?? raw.title ?? '(未命名工单)'),
-    deviceId: String(spec.deviceId ?? spec.repo?.deviceId ?? raw.deviceId ?? ''),
-    workspacePath: String(spec.repo?.workspacePath ?? raw.workspacePath ?? ''),
-    workUnitId: String(spec.workUnitId ?? raw.workUnitId ?? ''),
-    status: String(raw.status ?? 'queued') as CloudTaskStatusName,
-    createdAt: Number(raw.createdAt ?? now),
-    updatedAt: Number(raw.updatedAt ?? now),
-    startedAt: raw.startedAt ?? undefined,
-    finishedAt: raw.finishedAt ?? undefined,
-    terminalReason: raw.terminalReason ?? undefined,
-    lastMilestone: raw.progress?.summary ?? raw.lastMilestone ?? undefined,
+    title: String(spec.title ?? obj.title ?? '(未命名工单)'),
+    deviceId: String(spec.deviceId ?? specRepo.deviceId ?? obj.deviceId ?? ''),
+    workspacePath: String(specRepo.workspacePath ?? obj.workspacePath ?? ''),
+    workUnitId: String(spec.workUnitId ?? obj.workUnitId ?? ''),
+    status: String(obj.status ?? 'queued') as CloudTaskStatusName,
+    createdAt: Number(obj.createdAt ?? now),
+    updatedAt: Number(obj.updatedAt ?? now),
+    startedAt: typeof obj.startedAt === 'number' ? obj.startedAt : undefined,
+    finishedAt: typeof obj.finishedAt === 'number' ? obj.finishedAt : undefined,
+    terminalReason: typeof obj.terminalReason === 'string' ? obj.terminalReason : undefined,
+    lastMilestone:
+      typeof progressObj?.summary === 'string'
+        ? progressObj.summary
+        : typeof obj.lastMilestone === 'string'
+          ? obj.lastMilestone
+          : undefined,
     question,
-    worktreePath: raw.worktreePath ?? undefined,
-    branch: raw.progress?.branch ?? raw.branch ?? undefined,
+    worktreePath: typeof obj.worktreePath === 'string' ? obj.worktreePath : undefined,
+    branch:
+      typeof progressObj?.branch === 'string'
+        ? progressObj.branch
+        : typeof obj.branch === 'string'
+          ? obj.branch
+          : undefined,
     ...(changedFiles.length > 0 ? { changedFiles } : {}),
     ...(secretHits.length > 0 ? { secretHits } : {}),
     result:
@@ -131,53 +156,58 @@ export function normalizeCloudTask(raw: any, now = Date.now()): CloudTaskRow | n
             ...(secretHits.length > 0 ? { secretHits } : {}),
           }
         : undefined,
-    error: raw.error ?? undefined,
+    error: typeof obj.error === 'string' ? obj.error : undefined,
   }
 }
 
-export function normalizeCloudDevice(raw: any): CloudDeviceRow | null {
-  if (!raw || typeof raw !== 'object') return null
-  const id = String(raw.id ?? '')
+export function normalizeCloudDevice(raw: unknown): CloudDeviceRow | null {
+  const obj = asRecord(raw)
+  if (!obj) return null
+  const id = String(obj.id ?? '')
   if (!id) return null
   return {
     id,
-    name: String(raw.name ?? id),
-    platform: String(raw.platform ?? ''),
-    online: Boolean(raw.online),
-    workspaces: Array.isArray(raw.workspaces) ? raw.workspaces : [],
-    lastSeenAt: raw.lastSeenAt,
+    name: String(obj.name ?? id),
+    platform: String(obj.platform ?? ''),
+    online: Boolean(obj.online),
+    workspaces: Array.isArray(obj.workspaces)
+      ? (obj.workspaces as CloudDeviceRow['workspaces'])
+      : [],
+    lastSeenAt: typeof obj.lastSeenAt === 'number' ? obj.lastSeenAt : undefined,
   }
 }
 
-export function normalizeCloudUnit(raw: any, now = Date.now()): CloudUnitRow | null {
-  if (!raw || typeof raw !== 'object') return null
-  const unitId = String(raw.unitId ?? '')
+export function normalizeCloudUnit(raw: unknown, now = Date.now()): CloudUnitRow | null {
+  const obj = asRecord(raw)
+  if (!obj) return null
+  const unitId = String(obj.unitId ?? '')
   if (!unitId) return null
   return {
     unitId,
-    deviceId: String(raw.deviceId ?? ''),
-    workspacePath: String(raw.workspacePath ?? ''),
-    worktreePath: raw.worktreePath ?? undefined,
-    branch: raw.branch ?? undefined,
-    createdAt: Number(raw.createdAt ?? now),
-    closedAt: typeof raw.closedAt === 'number' ? raw.closedAt : null,
-    closeRequestedAt: raw.closeRequestedAt ?? undefined,
-    dirtyAt: raw.dirtyAt ?? undefined,
+    deviceId: String(obj.deviceId ?? ''),
+    workspacePath: String(obj.workspacePath ?? ''),
+    worktreePath: typeof obj.worktreePath === 'string' ? obj.worktreePath : undefined,
+    branch: typeof obj.branch === 'string' ? obj.branch : undefined,
+    createdAt: Number(obj.createdAt ?? now),
+    closedAt: typeof obj.closedAt === 'number' ? obj.closedAt : null,
+    closeRequestedAt: typeof obj.closeRequestedAt === 'number' ? obj.closeRequestedAt : undefined,
+    dirtyAt: typeof obj.dirtyAt === 'number' ? obj.dirtyAt : undefined,
   }
 }
 
-export function normalizeCloudAuthorization(raw: any): CloudAuthorizationRow | null {
-  if (!raw || typeof raw !== 'object') return null
-  const id = String(raw.id ?? '')
+export function normalizeCloudAuthorization(raw: unknown): CloudAuthorizationRow | null {
+  const obj = asRecord(raw)
+  if (!obj) return null
+  const id = String(obj.id ?? '')
   if (!id) return null
   return {
     id,
-    items: Array.isArray(raw.items) ? raw.items : [],
-    quota: Number(raw.quota ?? 0),
-    used: Number(raw.used ?? 0),
-    confirmedAt: Number(raw.confirmedAt ?? 0),
-    expiresAt: Number(raw.expiresAt ?? 0),
-    confirmedSummary: String(raw.confirmedSummary ?? ''),
+    items: Array.isArray(obj.items) ? (obj.items as CloudAuthorizationRow['items']) : [],
+    quota: Number(obj.quota ?? 0),
+    used: Number(obj.used ?? 0),
+    confirmedAt: Number(obj.confirmedAt ?? 0),
+    expiresAt: Number(obj.expiresAt ?? 0),
+    confirmedSummary: String(obj.confirmedSummary ?? ''),
   }
 }
 
@@ -206,8 +236,8 @@ export function applyCloudFrame(
   raw: unknown,
   options: ApplyCloudFrameOptions = {}
 ): ApplyCloudFrameResult {
-  const frame = raw as any
-  if (!frame || typeof frame !== 'object' || frame.v !== CLOUD_PROTOCOL_VERSION) {
+  const frame = asRecord(raw)
+  if (!frame || frame.v !== CLOUD_PROTOCOL_VERSION) {
     return { state: prev, unreadWorthy: false, snapshotUnread: false }
   }
 
@@ -215,17 +245,21 @@ export function applyCloudFrame(
   const incrementUnread = options.incrementUnreadOnEvents ?? false
 
   if (frame.type === 'snapshot') {
-    const snap = frame.snapshot ?? {}
+    const snap = asRecord(frame.snapshot) ?? {}
+    const away = asRecord(snap.awaySummary)
+    const cloudMeta = asRecord(snap.cloud)
     // 服务重启后 seq 可能归零重计：snapshot 必须重置游标，不能只取 max
     const nextSeq = Number(frame.seq ?? snap.lastSeq ?? 0)
     const unreadCount = Number(snap.unreadCount ?? 0)
     const awaySummary: CloudAwaySummaryRow | null =
-      snap.awaySummary && typeof snap.awaySummary.text === 'string'
+      away && typeof away.text === 'string'
         ? {
-            since: Number(snap.awaySummary.since ?? 0),
-            until: Number(snap.awaySummary.until ?? 0),
-            text: String(snap.awaySummary.text),
-            items: Array.isArray(snap.awaySummary.items) ? snap.awaySummary.items : [],
+            since: Number(away.since ?? 0),
+            until: Number(away.until ?? 0),
+            text: String(away.text),
+            items: Array.isArray(away.items)
+              ? (away.items as CloudAwaySummaryRow['items'])
+              : [],
           }
         : null
     const next: CloudSessionState = {
@@ -260,8 +294,8 @@ export function applyCloudFrame(
       lastReadSeq: Number(snap.lastReadSeq ?? 0),
       unreadCount,
       stoppingTaskIds: {},
-      agentStatus: normalizeAgentStatus(snap.cloud?.status),
-      canStopReply: Boolean(snap.cloud?.canStopReply),
+      agentStatus: normalizeAgentStatus(cloudMeta?.status),
+      canStopReply: Boolean(cloudMeta?.canStopReply),
     }
     return { state: next, unreadWorthy: false, snapshotUnread: unreadCount > 0 }
   }
@@ -291,7 +325,7 @@ export function applyCloudFrame(
     }
   }
 
-  const event = frame.event ?? {}
+  const event = asRecord(frame.event) ?? {}
   const base = nextSeq === prev.lastSeq ? prev : { ...prev, lastSeq: nextSeq }
 
   switch (event.type) {
@@ -419,7 +453,7 @@ export function applyCloudFrame(
           pendingTrace: false,
           thinkingStartedAt: undefined,
           ...(thinkingDurationMs !== undefined ? { thinkingDurationMs } : {}),
-          error: event.error,
+          error: typeof event.error === 'string' ? event.error : undefined,
         }
       }
       let idx = targetId ? messages.findIndex((item) => item.id === targetId) : -1
@@ -445,7 +479,7 @@ export function applyCloudFrame(
       }
     }
     case 'trace': {
-      const trace = event.trace ?? {}
+      const trace = asRecord(event.trace) ?? {}
       const traceType = String(trace.type ?? '')
       if (
         traceType !== 'thinking_delta' &&
@@ -609,14 +643,15 @@ export function applyCloudFrame(
       }
     }
     case 'notice': {
+      const key = typeof event.key === 'string' ? event.key : undefined
       const notice: CloudNotice = {
         level: event.level === 'error' || event.level === 'warn' ? event.level : 'info',
         text: String(event.text ?? ''),
         at: Number(event.at ?? now),
-        key: event.key,
+        key,
       }
-      const notices = event.key
-        ? [notice, ...base.notices.filter((item) => item.key !== event.key)].slice(0, 20)
+      const notices = key
+        ? [notice, ...base.notices.filter((item) => item.key !== key)].slice(0, 20)
         : [notice, ...base.notices].slice(0, 20)
       return { state: { ...base, notices }, unreadWorthy: false, snapshotUnread: false }
     }

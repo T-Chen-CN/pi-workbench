@@ -1,15 +1,15 @@
 # Pi Workbench 设计系统规范
 
-> **面向**：所有改前端界面的人（桌面端渲染层、`packages/cloud-ui`、云端 Web 控制台）
+> **面向**：所有改前端界面的人（桌面端渲染层、`packages/ui`、`packages/cloud-ui`、云端 Web 控制台）
 > **什么时候读**：动手写任何 UI 之前（强制）
 > **什么时候要改**：引入规范之外的 Token、排版角色或基础交互契约前，先更新本文件并经项目所有者确认
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | v2.0（精简重构版；历史演进见 `git log`） |
+| 文档版本 | v2.1（Phase D 共享包收敛版；历史演进见 `git log`） |
 | 状态 | Active（正式规范） |
-| 最后更新 | 2026-11-27 |
-| 适用范围 | `src/`、`packages/cloud-ui/`、`apps/cloud/web-src/`、Monaco / xterm 主题 |
+| 最后更新 | 2026-11-28 |
+| 适用范围 | `src/`、`packages/ui/`、`packages/cloud-ui/`、`apps/cloud/web-src/`、Monaco / xterm 主题 |
 
 ---
 
@@ -104,13 +104,13 @@
 
 ## 5. 基础组件与共享原语 API
 
-桌面端优先复用 [ui.tsx](../../src/components/ui/ui.tsx) 与 [patterns.tsx](../../src/components/ui/patterns.tsx)；云端 Web 与桌面端共享组件优先复用 `packages/cloud-ui`（零桌面 store / `i18n` / Electron 依赖）。
+Paper & Ink 基础原语与内容模式的**唯一规范实现**位于 `@pi-workbench/ui`（[primitives.tsx](../../packages/ui/src/primitives.tsx) 与 [patterns.tsx](../../packages/ui/src/patterns.tsx)）；桌面端 [ui.tsx](../../src/components/ui/ui.tsx) / [patterns.tsx](../../src/components/ui/patterns.tsx) 与 `packages/cloud-ui/src/primitives.tsx` 均为薄兼容再导出层；云端业务卡片/弹窗复用 `@pi-workbench/cloud-ui`（零桌面 `src/` / Zustand / Electron 依赖）。
 
 | 模块 | 导出组件 | 关键约定 |
 | --- | --- | --- |
-| `src/components/ui/ui.tsx` | `Button`, `IconButton`, `Input`, `Textarea`, `Select`, `Field`, `EmptyState`, `Modal`, `PopoverMenu`, `Spinner`, `Label`, `Value`, `Caption`, `DataText`, `Eyebrow` | `IconButton` 必填 `label`（作 `aria-label` 与 `title`）；不用 emoji 当图标；焦点态统一 1px `accent` 描边 |
-| `src/components/ui/patterns.tsx` | `Card`, `CardHeader`, `SectionHeader`, `Stat`, `StatGrid`, `StatusText`, `QuickAction`, `ListRow`, `KeyCap`, `SearchField`, `Meter`, `Tab` | `Card` = `border border-rule-hairline bg-raised`（无投影）；`CardHeader` 同时渲染 `status` 与 `action`；所有标签页必须使用 `Tab` |
-| `packages/cloud-ui` | 零桌面依赖的 Paper & Ink 原语、WS 帧归并器与云端卡片/弹窗 | 供桌面端云端页与 `apps/cloud/web-src` 共用，受 ESLint 跨包边界规则强制隔离 |
+| `packages/ui/src/primitives.tsx`（桌面兼容再导出 `src/components/ui/ui.tsx`） | `Button`, `IconButton`, `OverlayButton`, `Input`, `Textarea`, `Select`, `Field`, `EmptyState`, `Modal`, `PopoverMenu`, `MenuOption`, `Spinner`, `Label`, `Value`, `Caption`, `DataText`, `Eyebrow` | `IconButton` 必填 `label`（作 `aria-label` 与 `title`）；不用 emoji 当图标；焦点态统一 1px `accent` 描边 |
+| `packages/ui/src/patterns.tsx`（桌面兼容再导出 `src/components/ui/patterns.tsx`） | `Card`, `CardHeader`, `SectionHeader`, `Stat`, `StatGrid`, `StatusText`, `QuickAction`, `ListRow`, `LegendRow`, `SettingsTable`, `KeyCap`, `SearchField`, `Meter`, `RingMeter`, `Tab`, `Tabs` | `Card` = `border border-rule-hairline bg-raised`（无投影）；`CardHeader` 同时渲染 `status` 与 `action`；所有标签页必须使用 `Tab` |
+| `packages/cloud-ui` | 基于 `@pi-workbench/ui` 与 `@pi-workbench/i18n` 的 WS 帧归并器、云端卡片与弹窗 | 供桌面端云端页与 `apps/cloud/web-src` 共用，受 ESLint 跨包边界规则强制隔离 |
 
 ---
 
@@ -133,6 +133,7 @@
 
 所有 UI 改动合并前必须通过以下自动门禁（不再依赖人工肉眼排查）：
 
-- **ESLint 门禁**（[eslint.config.js](../../eslint.config.js)）：`eslint-plugin-jsx-a11y` 推荐规则、跨包依赖边界（`packages/cloud-ui` / `apps/cloud/web-src` 禁引桌面 store / i18n / Electron；`src/` 禁引 Node / Electron）、AST 级十六进制色值禁令（仅 `src/theme/`、`shikiHighlighter.ts` 与原语文件豁免）。
-- **设计系统单测**（[design-system.test.ts](../../tests/ui/design-system.test.ts)）：校验语义排版、语义色拼写、线条角色、浮层满墨边框、`Tab` 唯一入口、24px 关闭热区及云端 Web 零 XSS / Paper & Ink 一致性。
+- **ESLint 严格门禁**（[eslint.config.js](../../eslint.config.js)，`npm run lint` 执行 `eslint . --max-warnings 0`）：`eslint-plugin-jsx-a11y` 推荐规则（覆盖 `src/`、`packages/ui/`、`packages/cloud-ui/`、`apps/cloud/web-src/`）、`@typescript-eslint/no-explicit-any`（仅 `pi-bridge/src/**`、`apps/cloud/src/agent/tools.ts` 与 `tests/**` 窄豁免）、类型感知 `@typescript-eslint/no-floating-promises`、跨包依赖边界（`packages/{ui,i18n,cloud-ui}` 与 `apps/cloud/web-src` 禁引桌面 `src/` 源码 / Zustand / Electron，仅放行 `../../../src/index.css`；`src/` 禁引 Node / Electron，仅 IPC 契约点放行 `../../electron/ipc/contract`）、AST 级十六进制色值禁令（仅 `src/theme/`、`shikiHighlighter.ts` 与原语实现文件豁免）。
+- **设计系统单测**（[design-system.test.ts](../../tests/ui/design-system.test.ts)）：基于 TypeScript AST 提取字符串/模板字面量与 JSX `role="tab"`（消除注释误报），覆盖 `src/**/*.{ts,tsx}`、`packages/ui/src/**`、`packages/cloud-ui/src/**`、`apps/cloud/web-src/**`，校验语义排版、全部 Tailwind 默认调色板禁令、语义色拼写、线条角色、浮层满墨边框、`Tab` 唯一入口、24px 关闭热区及云端 Web 零 XSS / Paper & Ink 一致性。
+- **Electron 真实窗口冒烟**（[electron-smoke.mjs](../../tests/e2e/electron-smoke.mjs)，`npm run test:e2e:smoke`）：通过 Playwright `_electron` 校验首屏 Paper & Ink 渲染、preload `window.electronAPI`、明暗主题切换（Paper ↔ Ink）、语言切换及工作区文件闭环。
 - **变更流程**：需新增 Token、排版角色或豁免项时，先修改本规范与对应门禁并获得项目所有者确认，再改业务代码。

@@ -32,7 +32,7 @@ import type {
   WebTaskItem,
 } from './cloudWebClient'
 
-export type WebRequestFn = <T = any>(
+export type WebRequestFn = <T = unknown>(
   method: string,
   path: string,
   body?: unknown

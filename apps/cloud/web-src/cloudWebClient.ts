@@ -60,7 +60,7 @@ export type WebTaskItem = CloudTaskRow
 export type WebSessionState = CloudSessionState
 export type FrameApplyResult = ApplyCloudFrameResult
 
-export interface RequestResult<T = any> {
+export interface RequestResult<T = unknown> {
   ok: boolean
   status: number
   payload: T | null
@@ -169,7 +169,7 @@ export function applyLanguage(language: Language): void {
   }
 }
 
-export async function apiRequest<T = any>(
+export async function apiRequest<T = unknown>(
   method: string,
   path: string,
   body?: unknown,

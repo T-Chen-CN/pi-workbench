@@ -100,6 +100,15 @@ interface AppAdapterLike {
   onQuit: (handler: (exitCode: number) => void) => void
 }
 
+interface UpdaterEventMap {
+  'checking-for-update': []
+  'update-available': [info: UpdateInfoLike]
+  'update-not-available': [info: UpdateInfoLike]
+  'download-progress': [progress: DownloadProgressLike]
+  'update-downloaded': [info: UpdateInfoLike]
+  error: [error: unknown]
+}
+
 interface UpdaterLike {
   autoDownload: boolean
   autoInstallOnAppQuit: boolean
@@ -108,7 +117,10 @@ interface UpdaterLike {
   /** Windows NSIS 安装目录；设置后 electron-updater 会传 `/D=` */
   installDirectory?: string
   logger: UpdateLogger
-  on: (event: string, listener: (...args: any[]) => void) => unknown
+  on: <K extends keyof UpdaterEventMap>(
+    event: K,
+    listener: (...args: UpdaterEventMap[K]) => void
+  ) => unknown
   checkForUpdates: () => Promise<{
     isUpdateAvailable?: boolean
     updateInfo?: UpdateInfoLike

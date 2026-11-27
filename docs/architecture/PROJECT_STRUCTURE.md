@@ -15,11 +15,12 @@
 | 桌面框架 | Electron | 44.9.1（Node 24） |
 | 渲染进程 | React + TypeScript | 19 / 5.9 |
 | 构建 | Vite | 5.4 |
-| 状态管理 | Zustand | 4.5 |
+| 状态管理 | Zustand | 5.1 |
 | 编辑器 | Monaco Editor | 0.57 |
 | 样式 | TailwindCSS | 3.4 |
+| 多语言 | i18next / react-i18next | 27 / 18 |
 | Agent SDK | @earendil-works/pi-coding-agent | 1.3 |
-| 测试 | Vitest | 2.1 |
+| 测试 | Vitest + Playwright (`_electron`) | 2.1 / 1.65 |
 
 ---
 
@@ -29,12 +30,12 @@
 pi-workbench/
 ├── electron/                     # Electron 主进程
 │   ├── main.ts                   # 启动、窗口与生命周期装配
-│   ├── preload.cts               # contextBridge（编译为 CommonJS preload.cjs）
+│   ├── preload.cts               # contextBridge（由 scripts/build-preload.mjs 经 esbuild 打包为 CommonJS preload.cjs）
 │   ├── app-paths.ts              # 严格两目录模型（安装目录 + <appData>/pi-workbench，便携版退回单目录）
 │   ├── workspace-trust.ts        # 工作区信任与路径包含（lstat/readlink/realpath 防悬挂软链）
 │   ├── path-safety.ts            # 纯 Node 路径安全工具（Worker 可复用，不引 electron）
 │   ├── worker-runner.ts          # 轻量 worker_threads 执行器（文档解析 / 仓库地图卸载）
-│   ├── ipc/                      # 按域注册 IPC + schemas.ts（高危入参 Zod 校验）
+│   ├── ipc/                      # 按域注册 IPC + contract.ts（单一 IPC 契约）+ schemas.ts（高危入参 Zod 校验）
 │   ├── documents/                # 文档解析（零依赖，documents-worker.ts 跑在 worker_threads）
 │   │   ├── zip.ts                # node:zlib 手写 ZIP 中央目录（不引第三方）
 │   │   ├── xml.ts                # 流式 XML 扇描（不建 DOM）
@@ -142,10 +143,15 @@ pi-workbench/
 │   │   └── index.ts              # 编辑器通用类型
 │   └── i18n/                     # 中英文文案与错误本地化
 │
-├── tests/                        # Vitest 单元 / 组件测试（按域分子目录：agent / cloud / electron / git / ui / utils）
+├── tests/                        # Vitest 单元/组件测试（agent / cloud / electron / git / ui / utils）+ e2e/electron-smoke.mjs（Playwright 冒烟）
 │
-├── packages/cloud-ui/            # 桌面端与云端 Web 共享 UI（npm workspace，零 Electron / zustand / 桌面 store 依赖）
-│   └── src/                      # types / format / frameReducer / primitives / cards
+├── packages/
+│   ├── ui/                       # 桌面端与云端 Web 共享 Paper & Ink 基础 UI（@pi-workbench/ui，零桌面 store / Electron 依赖）
+│   │   └── src/                  # primitives / patterns / BrandSeal / StreamdownView / StreamingTranscript / chatScroll / shikiHighlighter
+│   ├── i18n/                     # 类型安全 i18next 词条与错误目录（@pi-workbench/i18n，供桌面端渲染层、主进程与云端 Web 共用）
+│   │   └── src/                  # resources / errors / index
+│   └── cloud-ui/                 # 桌面端与云端 Web 共享云端业务 UI（@pi-workbench/cloud-ui，基于 @pi-workbench/ui & @pi-workbench/i18n）
+│       └── src/                  # types / format / frameReducer / primitives（再导出）/ cards / Cloud* 组件
 │
 ├── apps/cloud/                   # 云端服务（npm workspace，不依赖 Electron）
 │   ├── src/
@@ -169,10 +175,15 @@ pi-workbench/
 │   ├── link-store.ts             # 配对凭据（safeStorage 加密）
 │   └── inventory.ts              # 工作区上报清单（路径 / remote / 默认分支）
 │
-├── pi-bridge/                    # Agent 桥接层（主进程内运行）
+├── pi-bridge/                    # Agent 桥接层（主进程内运行；子路径导出：. / protocol / presets / images / atomic-json）
 │   ├── src/
 │   │   ├── agent-manager.ts      # 会话协调入口（拆分出 agent-runtime-types / agent-session-events / agent-title-service / agent-catalog）
+│   │   ├── session-controller.ts # 会话控制编排（轮次状态、工作树边界切换、扩展装配）
+│   │   ├── session-repository.ts # 会话持久化仓库（头信息读取、打开标签态、列表与清理）
 │   │   ├── session-view.ts       # 聊天消息唯一投影（deriveMessages / 持久化 entryId / 聚合 usage）
+│   │   ├── protocol.ts           # 子路径入口 `pi-bridge/protocol`（云端协议帧与 Zod 契约）
+│   │   ├── presets.ts            # 子路径入口 `pi-bridge/presets`（内置供应商预设）
+│   │   ├── images.ts             # 子路径入口 `pi-bridge/images`（图片附件预处理）
 │   │   ├── environment.ts        # 环境租约（工作区级共享资源）
 │   │   ├── model-config.ts       # models.json 读写与 key 插值
 │   │   ├── approval-policy.ts    # 会话模式与审批策略
@@ -198,12 +209,12 @@ pi-workbench/
 │   │   └── index.ts              # 对外导出
 │   └── dist/                     # 构建产物（不纳入版本库）
 │
-├── tests/                        # 按域分子目录（agent / cloud / electron / git / ui / utils）
+├── scripts/                      # 构建与打包脚本（build-preload.mjs / build-cloud-bundle.mjs / build-win-portable.mjs / vite 插件）
 ├── docs/                         # 项目文档
 ├── vite.config.ts                # Vite + 仅开发环境的 dev 中间件
-├── vitest.config.ts
-├── eslint.config.js
-└── package.json                  # scripts / electron-builder 配置
+├── vitest.config.ts              # Vitest 配置（将 pi-bridge 及子路径直接 alias 到 pi-bridge/src/*.ts）
+├── eslint.config.js              # ESLint 严格门禁（--max-warnings 0 / no-explicit-any / no-floating-promises / 边界与色值护栏）
+└── package.json                  # scripts / workspaces / electron-builder 配置
 ```
 
 ---
@@ -319,7 +330,7 @@ ChatPanel.handleSubmit
 
 ### 新增 IPC
 
-用 `handleIpc()` 在 `electron/ipc/<域>.ts` 注册（来源校验），再走 preload → 类型 → `src/api`。四步清单与示例见 [agent/ipc-and-trust §2](../agent/ipc-and-trust.md)。
+在 `electron/ipc/contract.ts` 登记频道契约（高危入参补 `electron/ipc/schemas.ts` Zod 校验），用 `handleIpc()` 在 `electron/ipc/<域>.ts` 注册（来源校验），再走 `electron/preload.cts` → `src/types/electron.d.ts` → `src/api/index.ts`。四步清单与示例见 [agent/ipc-and-trust §2](../agent/ipc-and-trust.md)。
 
 ### 新增组件 / Store
 
@@ -341,7 +352,8 @@ ChatPanel.handleSubmit
 | 路径 | 内容 | 是否入库 |
 |---|---|---|
 | `dist/` | 渲染进程 | 否 |
-| `dist-electron/` | 主进程 + preload | 否 |
-| `pi-bridge/dist/` | AgentManager | 否（`predev`/`build` 自动生成） |
+| `dist-electron/` | 主进程 + esbuild 打包后的 `preload.cjs` | 否 |
+| `packages/i18n/dist/` | `@pi-workbench/i18n` 编译产物 | 否（`predev`/`build` 自动生成） |
+| `pi-bridge/dist/` | AgentManager 与子路径编译产物 | 否（`predev`/`build` 自动生成） |
 | `apps/cloud/web-dist/` | 云端 Web 静态产物 | 否（`build:cloud-web` / `build:cloud` 生成） |
 | `release/` | 安装包/解包目录 | 否 |

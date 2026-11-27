@@ -1,6 +1,7 @@
 {
   "compilerOptions": {
     "composite": true,
+    "allowJs": true,
     "skipLibCheck": true,
     "module": "ESNext",
     "moduleResolution": "bundler",
@@ -10,5 +11,11 @@
     "lib": ["ES2022"],
     "types": ["node"]
   },
-  "include": ["vite.config.ts", "vitest.config.ts"]
+  "include": [
+    "vite.config.ts",
+    "vite.config.cloud-web.ts",
+    "vitest.config.ts",
+    "scripts/*.ts",
+    "scripts/*.mjs"
+  ]
 }

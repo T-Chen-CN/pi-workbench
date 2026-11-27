@@ -5,16 +5,10 @@ on:
     branches: [main]
     paths:
       - 'apps/cloud/**'
+      - 'packages/ui/**'
+      - 'packages/i18n/**'
       - 'packages/cloud-ui/**'
       - 'pi-bridge/**'
-      - 'src/components/ui/StreamdownView.tsx'
-      - 'src/components/cloud/CloudTraceSection.tsx'
-      - 'src/components/ui/StreamingTranscript.tsx'
-      - 'src/components/cloud/TaskResultSection.tsx'
-      - 'src/components/ui/BrandSeal.tsx'
-      - 'src/hooks/chatScroll.ts'
-      - 'src/utils/shikiHighlighter.ts'
-      - 'src/types/cloud.ts'
       - 'src/index.css'
       - 'tailwind.config.js'
       - 'vite.config.cloud-web.ts'
@@ -54,9 +48,12 @@ jobs:
 
       - name: Verify cloud types and tests before bundling
         run: |
+          npm run build:i18n
           npm run build:bridge
-          npm run type-check:cloud
+          npm run type-check --workspace @pi-workbench/i18n
+          npm run type-check --workspace @pi-workbench/ui
           npm run type-check --workspace @pi-workbench/cloud-ui
+          npm run type-check:cloud
           npm run build:cloud-web
           npx vitest run tests/cloud/ tests/electron/phase0-security-and-reliability.test.ts tests/ui/design-system.test.ts
 

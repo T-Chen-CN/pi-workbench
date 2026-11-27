@@ -631,12 +631,12 @@ export const FileExplorer: React.FC<{
         onFocus={() => setFocusedPath(node.path)}
         onClick={() => {
           setFocusedPath(node.path)
-          handleFileClick(node)
+          void handleFileClick(node)
         }}
         onKeyDown={(event) => {
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault()
-            handleFileClick(node)
+            void handleFileClick(node)
             return
           }
           if (event.key === 'ArrowDown') {
@@ -663,7 +663,7 @@ export const FileExplorer: React.FC<{
             event.preventDefault()
             if (node.isDirectory) {
               if (!node.isExpanded) {
-                handleFileClick(node)
+                void handleFileClick(node)
               } else if (rowIndex + 1 < flatRows.length && flatRows[rowIndex + 1].depth > depth) {
                 focusRowAt(rowIndex + 1)
               }
@@ -673,7 +673,7 @@ export const FileExplorer: React.FC<{
           if (event.key === 'ArrowLeft') {
             event.preventDefault()
             if (node.isDirectory && node.isExpanded) {
-              handleFileClick(node)
+              void handleFileClick(node)
             } else if (depth > 0) {
               for (let i = rowIndex - 1; i >= 0; i -= 1) {
                 if (flatRows[i].depth < depth) {

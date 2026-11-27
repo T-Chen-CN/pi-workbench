@@ -2,6 +2,7 @@
 
 import React from 'react'
 import { PanelRightClose } from 'lucide-react'
+import type { TranslationKey, TranslationParams } from '@pi-workbench/i18n'
 import { IconButton } from '../ui/ui'
 import { PanelDragHandle } from '../panels/PanelDragHandle'
 import { usePanelContextMenu } from '../panels/PanelContextMenu'
@@ -11,7 +12,7 @@ export interface ChatPanelHeaderProps {
   onCollapse?: () => void
   collapseButtonRef?: React.Ref<HTMLButtonElement>
   panelId?: string
-  t: (key: any) => string
+  t: (key: TranslationKey, params?: TranslationParams) => string
   /** 有工作区时才渲染工作树 chip */
   workspacePath?: string
   /** false 表示 Agent 仍在初始化：标题退为「初始化中…」并显示脉冲点 */
