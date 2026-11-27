@@ -213,21 +213,21 @@ const MessageImages: React.FC<{
             role="dialog"
             aria-modal="true"
             aria-label={t('imagePreviewLabel', { index: preview + 1 })}
-            className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/80 p-6"
-            onClick={() => setPreview(null)}
+            className="fixed inset-0 z-50 flex items-center justify-center p-6"
           >
+            <div
+              aria-hidden="true"
+              className="absolute inset-0 bg-overlay/80"
+              onClick={() => setPreview(null)}
+            />
             <img
               src={`data:${images[preview].mimeType};base64,${images[preview].data}`}
               alt=""
-              onClick={(event) => event.stopPropagation()}
-              className="max-h-full max-w-full object-contain"
+              className="relative max-h-full max-w-full object-contain"
             />
             <button
               type="button"
-              onClick={(event) => {
-                event.stopPropagation()
-                setPreview(null)
-              }}
+              onClick={() => setPreview(null)}
               aria-label={t('close')}
               className="absolute right-4 top-4 border border-rule-control bg-raised p-1.5 text-ink transition-colors hover:text-accent"
             >

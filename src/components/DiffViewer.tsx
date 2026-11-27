@@ -113,7 +113,7 @@ export const DiffViewer: React.FC<{ workspacePath: string; active?: boolean }> =
       data-diff-viewer="true"
       className="fixed inset-0 z-40 flex items-center justify-center p-6"
     >
-      <div className="absolute inset-0 bg-overlay/50" onClick={handleClose} />
+      <div aria-hidden="true" className="absolute inset-0 bg-overlay/50" onClick={handleClose} />
       <div
         ref={dialogRef}
         tabIndex={-1}

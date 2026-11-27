@@ -1129,6 +1129,7 @@ export const RepoMapCanvas = forwardRef<RepoMapCanvasHandle, RepoMapCanvasProps>
     ])
 
     return (
+      /* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- WAI-ARIA application 画布需要承接键盘平移/缩放与指针交互 */
       <div
         ref={viewportRef}
         data-testid="repo-map-canvas"

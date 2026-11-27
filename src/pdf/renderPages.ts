@@ -7,6 +7,7 @@
  * 画布只用于这一张临时图，不需要进 DOM：pdf.js 只要拿到 2D context 就能画。
  */
 
+import { PDF_PAGE_BACKGROUND_HEX } from '../theme/tokens'
 import { BundledBinaryDataFactory } from './pdfAssets'
 
 /** 单页最长边上限：2 倍缩放后再收敛，避免 4K 屏上生成 8000px 的大图 */
@@ -66,7 +67,7 @@ export async function renderPdfPagesToImages(
       const context = canvas.getContext('2d')
       if (!context) throw new Error('无法创建画布上下文')
       // 白底：扫描件常自带透明区域，落成 PNG 会是黑底
-      context.fillStyle = '#ffffff'
+      context.fillStyle = PDF_PAGE_BACKGROUND_HEX
       context.fillRect(0, 0, canvas.width, canvas.height)
       await page.render({ canvas, canvasContext: context, viewport }).promise
       images.push(toDataUrl(canvas))

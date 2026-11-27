@@ -30,21 +30,14 @@ const PathCode: React.FC<{ value: string; children: React.ReactNode }> = ({ valu
   }
 
   return (
-    <code
-      role="button"
-      tabIndex={0}
-      className="cursor-pointer underline-offset-2 hover:text-accent hover:underline"
+    <button
+      type="button"
+      className="inline cursor-pointer border-0 bg-transparent p-0 text-left align-baseline underline-offset-2 hover:text-accent hover:underline"
       title={value}
       onClick={() => void open()}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault()
-          void open()
-        }
-      }}
     >
-      {children}
-    </code>
+      <code>{children}</code>
+    </button>
   )
 }
 

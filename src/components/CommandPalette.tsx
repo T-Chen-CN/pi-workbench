@@ -363,7 +363,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       data-command-palette="true"
       className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-20"
     >
-      <div className="absolute inset-0 bg-overlay/50" onClick={() => setOpen(false)} />
+      <div aria-hidden="true" className="absolute inset-0 bg-overlay/50" onClick={() => setOpen(false)} />
       <div
         ref={dialogRef}
         className="relative flex max-h-[70vh] w-full max-w-xl flex-col overflow-hidden border border-line bg-raised shadow-print"

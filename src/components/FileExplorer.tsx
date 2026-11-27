@@ -727,14 +727,22 @@ export const FileExplorer: React.FC<{
       </div>
 
       {contextMenu && (
-        <div className="fixed inset-0 z-50" onClick={() => setContextMenu(null)}>
+        <div className="fixed inset-0 z-50">
           <div
+            aria-hidden="true"
+            className="absolute inset-0"
+            onClick={() => setContextMenu(null)}
+          />
+          <div
+            role="menu"
+            tabIndex={-1}
+            aria-label={contextMenu.node.name}
             className="absolute min-w-[150px] overflow-hidden border border-line bg-raised py-1 shadow-print"
             style={{ left: contextMenu.x, top: contextMenu.y }}
-            onClick={(event) => event.stopPropagation()}
           >
             <button
               type="button"
+              role="menuitem"
               className="flex w-full items-center gap-2 px-3 py-1.5 text-left type-value text-ink hover:bg-hover"
               onClick={() => handleRename(contextMenu.node)}
             >
@@ -743,6 +751,7 @@ export const FileExplorer: React.FC<{
             </button>
             <button
               type="button"
+              role="menuitem"
               className="flex w-full items-center gap-2 px-3 py-1.5 text-left type-value text-danger hover:bg-danger/10"
               onClick={() => handleDelete(contextMenu.node)}
             >

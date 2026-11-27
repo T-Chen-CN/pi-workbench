@@ -35,6 +35,11 @@ const TOKEN_NAMES = [
 export type ThemeToken = (typeof TOKEN_NAMES)[number]
 export type ThemeTokens = Record<ThemeToken, string>
 
+/** 未加载 CSS 变量时的纸面面板首帧底色回退（供辅助窗口 about:blank 传参） */
+export const PAPER_PANEL_FALLBACK_HEX = '#f4f1ea'
+/** PDF 扫描页离屏渲染底色（必须纯白，避免透明区域落成 PNG 黑底） */
+export const PDF_PAGE_BACKGROUND_HEX = '#ffffff'
+
 export function readThemeTokens(dark: boolean): ThemeTokens {
   const fallback = Object.fromEntries(TOKEN_NAMES.map((name) => [name, '0 0 0'])) as ThemeTokens
   if (typeof document === 'undefined') return fallback

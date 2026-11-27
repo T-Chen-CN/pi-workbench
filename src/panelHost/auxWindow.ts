@@ -11,6 +11,7 @@
  * - 相对 URL 必须绝对化：子文档地址是 about:blank，`<base>` 只作为兜底。
  */
 
+import { PAPER_PANEL_FALLBACK_HEX } from '../theme/tokens'
 import { frameNameOf } from './types'
 
 export interface AuxWindowRect {
@@ -62,7 +63,7 @@ const AUX_CONTENT_SECURITY_POLICY = [
 export function panelBackgroundColor(): string {
   const value = getComputedStyle(document.documentElement).getPropertyValue('--panel').trim()
   const match = /^(\d{1,3})\s+(\d{1,3})\s+(\d{1,3})$/.exec(value)
-  if (!match) return '#f4f1ea'
+  if (!match) return PAPER_PANEL_FALLBACK_HEX
   const toHex = (part: string) => Math.min(255, Number(part)).toString(16).padStart(2, '0')
   return `#${toHex(match[1])}${toHex(match[2])}${toHex(match[3])}`
 }

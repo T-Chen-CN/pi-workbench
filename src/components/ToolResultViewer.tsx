@@ -381,10 +381,18 @@ export const ToolResultViewer: React.FC<ToolResultViewerProps> = ({
           aria-modal="true"
           aria-label={toolName}
           tabIndex={-1}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/70 p-6 focus:outline-none"
-          onClick={() => setShowImage(false)}
+          className="fixed inset-0 z-50 flex items-center justify-center p-6 focus:outline-none"
         >
-          <img src={image} alt={toolName} className="max-h-full max-w-full object-contain" />
+          <div
+            aria-hidden="true"
+            className="absolute inset-0 bg-overlay/70"
+            onClick={() => setShowImage(false)}
+          />
+          <img
+            src={image}
+            alt={toolName}
+            className="relative max-h-full max-w-full object-contain"
+          />
         </div>
       )}
     </Modal>

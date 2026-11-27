@@ -51,14 +51,23 @@ export const PanelContextMenu: React.FC<{
   )
 
   return createPortal(
-    <div className="fixed inset-0 z-50" onClick={onClose} onContextMenu={onClose}>
+    <div className="fixed inset-0 z-50">
+      <div
+        aria-hidden="true"
+        className="absolute inset-0"
+        onClick={onClose}
+        onContextMenu={(event) => {
+          event.preventDefault()
+          onClose()
+        }}
+      />
       <div
         ref={menuRef}
         role="menu"
+        tabIndex={-1}
         aria-label={label}
         style={{ left: pos.left, top: pos.top }}
         className="absolute min-w-[190px] overflow-hidden border border-line bg-raised py-1 shadow-print"
-        onClick={(event) => event.stopPropagation()}
       >
         {items.map(({ label: itemLabel, icon: Icon, onSelect }) => (
           <button

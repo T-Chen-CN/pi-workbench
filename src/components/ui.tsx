@@ -615,7 +615,7 @@ export const Modal: React.FC<ModalProps> = ({
       data-modal-portal="true"
       className={`fixed inset-0 ${zIndexClass} flex items-center justify-center p-6`}
     >
-      <div className="absolute inset-0 bg-overlay/35" onClick={onClose} />
+      <div aria-hidden="true" className="absolute inset-0 bg-overlay/35" onClick={onClose} />
       <div
         ref={dialogRef}
         role="dialog"

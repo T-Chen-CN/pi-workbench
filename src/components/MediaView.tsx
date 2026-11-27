@@ -74,11 +74,15 @@ export const MediaView: React.FC<{ file: OpenFile }> = ({ file }) => {
             controls
             onError={() => setFailed(true)}
             className="max-h-full max-w-full"
-          />
+          >
+            <track kind="captions" />
+          </video>
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 px-8">
-          <audio src={src} controls onError={() => setFailed(true)} className="w-full max-w-[480px]" />
+          <audio src={src} controls onError={() => setFailed(true)} className="w-full max-w-[480px]">
+            <track kind="captions" />
+          </audio>
           <Caption className="text-ink-muted">{file.name}</Caption>
         </div>
       )}

@@ -691,7 +691,7 @@ export const CloudWebApp: React.FC = () => {
           <span className="type-eyebrow text-ink">CLOUD</span>
         </div>
 
-        <nav
+        <div
           role="tablist"
           aria-label="Pi Cloud 导航"
           className="tab-strip-scroll flex h-full min-w-0 items-stretch overflow-x-auto"
@@ -711,7 +711,7 @@ export const CloudWebApp: React.FC = () => {
               }}
             />
           ))}
-        </nav>
+        </div>
 
         <div className="ml-auto flex flex-shrink-0 items-center gap-3">
           <div className="hidden items-center gap-3 md:flex">

@@ -408,8 +408,10 @@ export const PdfReadingView: React.FC<{ file: OpenFile }> = ({ file }) => {
         </div>
       </div>
 
+      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- 可滚动阅读区需要承接翻页与缩放快捷键 */}
       <div
         ref={scrollRef}
+        role="region"
         tabIndex={0}
         onScroll={handleScroll}
         onKeyDown={handleKeyDown}
