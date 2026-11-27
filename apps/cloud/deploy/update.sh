@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Pi Cloud 按需拉取更新脚本（Pull 模式，服务器零构建；手动触发，不设定时自动重启）：
 # 1. 拉取 GitHub Release (cloud-latest) 的 pi-cloud-manifest.json，对比已安装 sha256；
-# 2. 有新版才下载 pi-cloud-bundle.tar.gz 并严格校验 SHA-256；
-# 3. 解压到 /opt/pi-cloud/releases/<releaseId>，原子切 current 软链并重启 pi-cloud；
-# 4. 轮询 /v1/health（20s），失败自动回滚到旧版本；
+# 2. 有新版才下载 manifest.asset 指定的带版本号不可变压缩包，严格校验 SHA-256 与可选构建溯源签名；
+# 3. 安全解压到 /opt/pi-cloud/releases/<releaseId>，更新前做 SQLite 快照，原子替换 current 软链并重启；
+# 4. 轮询 /v1/health（20s），失败自动原子回滚到旧版本并复检回滚后的健康状态；
 # 5. 自动清理陈旧版本（默认保留最近 5 个，永不删 current 与上一回滚点）。
 set -euo pipefail
 
@@ -12,11 +12,14 @@ RELEASE_TAG="${PI_CLOUD_RELEASE_TAG:-cloud-latest}"
 ROOT_DIR="${PI_CLOUD_ROOT:-/opt/pi-cloud}"
 RELEASES_DIR="${ROOT_DIR}/releases"
 CURRENT_LINK="${ROOT_DIR}/current"
+DATA_DIR="${PI_CLOUD_DATA_DIR:-/var/lib/pi-cloud}"
+BACKUP_DIR="${PI_CLOUD_BACKUP_DIR:-/var/backups/pi-cloud}"
 SERVICE_NAME="${PI_CLOUD_SERVICE:-pi-cloud}"
 SERVICE_USER="${PI_CLOUD_USER:-pi-cloud}"
 HEALTH_URL="${PI_CLOUD_HEALTH_URL:-http://127.0.0.1:8787/v1/health}"
 KEEP_RELEASES="${PI_CLOUD_KEEP_RELEASES:-5}"
 LOCK_FILE="${PI_CLOUD_UPDATE_LOCK:-/run/pi-cloud-update.lock}"
+VERIFY_ATTESTATION="${PI_CLOUD_VERIFY_ATTESTATION:-auto}"
 
 DRY_RUN=0
 FORCE=0
@@ -46,7 +49,59 @@ if [ -n "${PI_CLOUD_GITHUB_TOKEN:-}" ]; then
 fi
 
 TMP_DIR="$(mktemp -d /tmp/pi-cloud-update.XXXXXX)"
-trap 'rm -rf "$TMP_DIR"' EXIT
+trap 'rm -rf "$TMP_DIR"; rm -f "${CURRENT_LINK}.tmp"' EXIT
+
+atomic_swap_current() {
+  local target="$1"
+  rm -f "${CURRENT_LINK}.tmp"
+  ln -s "$target" "${CURRENT_LINK}.tmp" && mv -Tf "${CURRENT_LINK}.tmp" "$CURRENT_LINK"
+}
+
+wait_for_health() {
+  local attempt body
+  for attempt in $(seq 1 20); do
+    body="$(curl -fsS --max-time 3 "$HEALTH_URL" 2>/dev/null || true)"
+    if [ -n "$body" ] && node -e '
+      const h = JSON.parse(process.argv[1]);
+      if (h.ok !== true) process.exit(1);
+      // 已配置模型时必须等 Agent 会话就绪（ready === true），避免损坏的 SDK/SQLite 版本通过健康检查
+      if (h.hasConfig === true && h.ready !== true) process.exit(1);
+    ' "$body" 2>/dev/null; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+verify_bundle_attestation() {
+  local archive="$1"
+  case "$VERIFY_ATTESTATION" in
+    0|false|no)
+      return 0
+      ;;
+    1|true|yes)
+      if ! command -v gh >/dev/null 2>&1; then
+        echo "[pi-cloud-update] PI_CLOUD_VERIFY_ATTESTATION=1 requires GitHub CLI (gh)" >&2
+        exit 1
+      fi
+      echo "[pi-cloud-update] verifying build provenance attestation via gh..."
+      GH_TOKEN="${PI_CLOUD_GITHUB_TOKEN:-${GH_TOKEN:-}}" \
+        gh attestation verify "$archive" --repo "$REPO"
+      ;;
+    *)
+      if command -v gh >/dev/null 2>&1; then
+        if [ -n "${PI_CLOUD_GITHUB_TOKEN:-${GH_TOKEN:-}}" ] || gh auth status >/dev/null 2>&1; then
+          echo "[pi-cloud-update] verifying build provenance attestation via gh..."
+          GH_TOKEN="${PI_CLOUD_GITHUB_TOKEN:-${GH_TOKEN:-}}" \
+            gh attestation verify "$archive" --repo "$REPO"
+        else
+          echo "[pi-cloud-update] gh CLI not authenticated; skipping provenance attestation (set PI_CLOUD_VERIFY_ATTESTATION=1 to enforce)"
+        fi
+      fi
+      ;;
+  esac
+}
 
 MANIFEST_FILE="${TMP_DIR}/manifest.json"
 HTTP_CODE="$(curl "${MANIFEST_CURL_ARGS[@]}" \
@@ -99,7 +154,7 @@ if [ "$FORCE" -eq 0 ] && [ -n "$INSTALLED_SHA" ] && [ "$INSTALLED_SHA" = "$EXPEC
 fi
 
 if [ "$DRY_RUN" -eq 1 ]; then
-  echo "[pi-cloud-update] dry-run: update available (${INSTALLED_ID:-unknown} -> ${RELEASE_ID}, sha256=${EXPECTED_SHA:0:12})"
+  echo "[pi-cloud-update] dry-run: update available (${INSTALLED_ID:-unknown} -> ${RELEASE_ID}, asset=${ASSET}, sha256=${EXPECTED_SHA:0:12})"
   exit 0
 fi
 
@@ -113,6 +168,8 @@ if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
   exit 1
 fi
 
+verify_bundle_attestation "$ARCHIVE_FILE"
+
 PREV_TARGET=""
 if [ -L "$CURRENT_LINK" ] || [ -e "$CURRENT_LINK" ]; then
   PREV_TARGET="$(readlink -f "$CURRENT_LINK" || true)"
@@ -124,7 +181,8 @@ if [ -e "$TARGET_DIR" ]; then
 fi
 
 mkdir -p "$TARGET_DIR"
-tar -xzf "$ARCHIVE_FILE" -C "$TARGET_DIR"
+# 以 root 解压不可信归档时必须禁用保留属主与特权位（setuid/setgid）
+tar --no-same-owner --no-same-permissions -xzf "$ARCHIVE_FILE" -C "$TARGET_DIR"
 
 if [ ! -f "${TARGET_DIR}/dist/main.js" ] || [ ! -f "${TARGET_DIR}/web/index.html" ]; then
   echo "[pi-cloud-update] extracted bundle missing dist/main.js or web/index.html" >&2
@@ -135,30 +193,40 @@ fi
 cp "$MANIFEST_FILE" "${TARGET_DIR}/.cloud-release.json"
 chown -R "${SERVICE_USER}:${SERVICE_USER}" "$TARGET_DIR"
 
-ln -sfn "$TARGET_DIR" "$CURRENT_LINK"
+# 重启前尽力为 SQLite 数据库留一份更新前快照，便于 schema/数据异常时快速恢复
+if [ -f "${DATA_DIR}/cloud.db" ] && command -v sqlite3 >/dev/null 2>&1; then
+  PRE_UPDATE_BACKUP="${BACKUP_DIR}/pre-update-$(date -u +%Y%m%dT%H%M%SZ).db"
+  if mkdir -p "$BACKUP_DIR" 2>/dev/null && (umask 077 && sqlite3 "${DATA_DIR}/cloud.db" ".timeout 5000" ".backup '${PRE_UPDATE_BACKUP}'"); then
+    chown "${SERVICE_USER}:${SERVICE_USER}" "$PRE_UPDATE_BACKUP" 2>/dev/null || true
+    chmod 600 "$PRE_UPDATE_BACKUP" 2>/dev/null || true
+    echo "[pi-cloud-update] pre-update sqlite snapshot written: ${PRE_UPDATE_BACKUP}"
+  else
+    echo "[pi-cloud-update] warning: pre-update sqlite snapshot failed (continuing update)" >&2
+  fi
+fi
+
+atomic_swap_current "$TARGET_DIR"
 systemctl restart "$SERVICE_NAME"
 
-HEALTHY=0
-for _ in $(seq 1 20); do
-  BODY="$(curl -fsS --max-time 3 "$HEALTH_URL" 2>/dev/null || true)"
-  if [ -n "$BODY" ] && node -e '
-    const h = JSON.parse(process.argv[1]);
-    if (h.ok !== true) process.exit(1);
-    // 已配置模型时必须等 Agent 会话就绪（ready === true），避免损坏的 SDK/SQLite 版本通过健康检查
-    if (h.hasConfig === true && h.ready !== true) process.exit(1);
-  ' "$BODY" 2>/dev/null; then
-    HEALTHY=1
-    break
-  fi
-  sleep 1
-done
-
-if [ "$HEALTHY" -ne 1 ]; then
+if ! wait_for_health; then
   echo "[pi-cloud-update] health check failed for ${RELEASE_ID}, rolling back!" >&2
   journalctl -u "$SERVICE_NAME" -n 40 --no-pager >&2 || true
   if [ -n "$PREV_TARGET" ] && [ -d "$PREV_TARGET" ]; then
-    ln -sfn "$PREV_TARGET" "$CURRENT_LINK"
-    systemctl restart "$SERVICE_NAME" || true
+    atomic_swap_current "$PREV_TARGET"
+    if ! systemctl restart "$SERVICE_NAME"; then
+      echo "[pi-cloud-update] CRITICAL: rollback restart failed for ${PREV_TARGET}" >&2
+      rm -rf "$TARGET_DIR"
+      exit 1
+    fi
+    if ! wait_for_health; then
+      echo "[pi-cloud-update] CRITICAL: rollback to ${PREV_TARGET} ALSO failed /v1/health check! Service ${SERVICE_NAME} requires immediate manual intervention." >&2
+      journalctl -u "$SERVICE_NAME" -n 40 --no-pager >&2 || true
+      rm -rf "$TARGET_DIR"
+      exit 1
+    fi
+    echo "[pi-cloud-update] rollback to ${PREV_TARGET} succeeded and passed /v1/health" >&2
+  else
+    echo "[pi-cloud-update] CRITICAL: no previous release available for rollback!" >&2
   fi
   rm -rf "$TARGET_DIR"
   exit 1

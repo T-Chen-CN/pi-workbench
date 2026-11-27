@@ -6,9 +6,11 @@ Documentation=https://github.com/T-Chen-CN/pi-workbench
 Type=oneshot
 User=pi-cloud
 Group=pi-cloud
-EnvironmentFile=/etc/pi-cloud/env
+# 备份任务不加载 /etc/pi-cloud/env，遵循最小权限原则，绝不接触 PI_CLOUD_ENC_KEY / PI_CLOUD_COOKIE_SECRET
 ExecStart=/opt/pi-cloud/backup.sh
-# 备份要写 /var/backups/pi-cloud，读 /var/lib/pi-cloud
+UMask=0077
+NoNewPrivileges=true
+# 备份需写 /var/backups/pi-cloud；SQLite WAL 模式下 .backup 在无主进程持锁时可能需要建 -shm，故 /var/lib/pi-cloud 保留读写
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true

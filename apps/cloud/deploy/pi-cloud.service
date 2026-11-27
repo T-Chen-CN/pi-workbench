@@ -3,6 +3,8 @@ Description=Pi Cloud control plane (Pi Workbench)
 Documentation=https://github.com/T-Chen-CN/pi-workbench
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -15,19 +17,29 @@ EnvironmentFile=/etc/pi-cloud/env
 ExecStart=/usr/bin/env node /opt/pi-cloud/current/dist/main.js
 Restart=always
 RestartSec=2
+TimeoutStopSec=15s
 # 云端只监听 127.0.0.1，TLS 与 WS 升级交给 Caddy
 Environment=NODE_ENV=production
 
 # 收紧权限：只允许写数据目录（/var/backups/pi-cloud 仅限独立备份任务写入，防运行期被篡改）
+UMask=0077
 NoNewPrivileges=true
+CapabilityBoundingSet=
 PrivateTmp=true
+PrivateDevices=true
 ProtectSystem=strict
 ProtectHome=true
+ProtectClock=true
+ProtectHostname=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
+ProtectKernelLogs=true
 ProtectControlGroups=true
+ProtectProc=invisible
 RestrictSUIDSGID=true
 RestrictNamespaces=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
 LockPersonality=true
 MemoryMax=1500M
 ReadWritePaths=/var/lib/pi-cloud

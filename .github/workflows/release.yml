@@ -45,7 +45,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      # 按需签名：配置证书密钥时自动开启代码签名与公证；未配置证书时保持无签名构建可用（D14）
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      CSC_IDENTITY_AUTO_DISCOVERY: ${{ ((matrix.platform == 'win' && (secrets.WIN_CSC_LINK != '' || secrets.CSC_LINK != '')) || (matrix.platform == 'mac' && secrets.CSC_LINK != '')) && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@v5
 

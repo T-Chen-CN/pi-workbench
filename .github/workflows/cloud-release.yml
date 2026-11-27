@@ -26,6 +26,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 concurrency:
   # 串行发布滚动云端产物，禁止并发覆盖或中断上传
@@ -67,10 +69,11 @@ jobs:
           STAMP="$(date -u +%Y%m%d%H%M%S)"
           SHORT_SHA="$(echo "$GITHUB_SHA" | cut -c1-7)"
           RELEASE_ID="${STAMP}-${SHORT_SHA}"
-          ARCHIVE="cache/pi-cloud-bundle.tar.gz"
+          ASSET_NAME="pi-cloud-bundle-${RELEASE_ID}.tar.gz"
+          ARCHIVE="cache/${ASSET_NAME}"
           tar -czf "$ARCHIVE" -C cache/cloud-bundle .
           SHA256="$(sha256sum "$ARCHIVE" | awk '{print $1}')"
-          RELEASE_ID="$RELEASE_ID" SHORT_SHA="$SHORT_SHA" SHA256="$SHA256" node -e '
+          RELEASE_ID="$RELEASE_ID" SHORT_SHA="$SHORT_SHA" ASSET_NAME="$ASSET_NAME" SHA256="$SHA256" node -e '
             const fs = require("fs");
             const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
             const manifest = {
@@ -79,7 +82,7 @@ jobs:
               shortSha: process.env.SHORT_SHA,
               builtAt: new Date().toISOString(),
               version: pkg.version,
-              asset: "pi-cloud-bundle.tar.gz",
+              asset: process.env.ASSET_NAME,
               sha256: process.env.SHA256,
             };
             fs.writeFileSync("cache/pi-cloud-manifest.json", JSON.stringify(manifest, null, 2) + "\n");
@@ -87,13 +90,19 @@ jobs:
           cat cache/pi-cloud-manifest.json
           echo "RELEASE_ID=$RELEASE_ID" >> "$GITHUB_ENV"
           echo "SHORT_SHA=$SHORT_SHA" >> "$GITHUB_ENV"
+          echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
           echo "SHA256=$SHA256" >> "$GITHUB_ENV"
+
+      - name: Attest bundle build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: cache/${{ env.ASSET_NAME }}
 
       - name: Publish rolling prerelease (never overrides desktop latest)
         run: |
           set -euo pipefail
           TAG="cloud-latest"
-          NOTES="Pi Cloud rolling bundle built from \`${GITHUB_SHA}\` (\`${RELEASE_ID}\`).\n\nSHA-256: \`${SHA256}\`"
+          NOTES="Pi Cloud rolling bundle built from \`${GITHUB_SHA}\` (\`${RELEASE_ID}\`).\n\nAsset: \`${ASSET_NAME}\`\nSHA-256: \`${SHA256}\`"
           # 必须保持 prerelease 且 latest=false，否则会劫持桌面端 electron-updater 的 /releases/latest
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" \
@@ -102,11 +111,35 @@ jobs:
               --title "Pi Cloud Rolling Bundle" \
               --notes "$(printf '%b' "$NOTES")"
           fi
-          # 必须先传压缩包再传 manifest，确保服务器读到新 manifest 时新包已就位
-          gh release upload "$TAG" cache/pi-cloud-bundle.tar.gz --clobber
+          # 必须先传不可变版本包再传 manifest，确保服务器读到新 manifest 时新包已就位且不覆盖旧包
+          gh release upload "$TAG" "cache/${ASSET_NAME}" --clobber
           gh release upload "$TAG" cache/pi-cloud-manifest.json --clobber
           gh release edit "$TAG" \
             --prerelease \
             --latest=false \
             --title "Pi Cloud Rolling Bundle" \
             --notes "$(printf '%b' "$NOTES")"
+
+          # 保留最近 5 个版本包以支持回滚，自动清理更早的 pi-cloud-bundle-*.tar.gz
+          OLD_ASSETS="$(gh release view "$TAG" --json assets | ASSET_NAME="$ASSET_NAME" node -e '
+            const fs = require("fs");
+            const data = JSON.parse(fs.readFileSync(0, "utf8"));
+            const current = process.env.ASSET_NAME;
+            const versioned = (data.assets || [])
+              .map((a) => a.name)
+              .filter((name) => /^pi-cloud-bundle-\d{14}-[0-9a-f]+\.tar\.gz$/.test(name))
+              .sort()
+              .reverse();
+            const keep = new Set(versioned.slice(0, 5));
+            keep.add(current);
+            for (const name of versioned) {
+              if (!keep.has(name)) console.log(name);
+            }
+          ')"
+          if [ -n "$OLD_ASSETS" ]; then
+            while IFS= read -r asset; do
+              [ -n "$asset" ] || continue
+              echo "Pruning old bundle asset: ${asset}"
+              gh release delete-asset "$TAG" "$asset" --yes || true
+            done <<<"$OLD_ASSETS"
+          fi
