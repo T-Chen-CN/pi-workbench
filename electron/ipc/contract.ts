@@ -690,6 +690,25 @@ export interface AgentInitConfig {
 export interface AgentInitResult {
   success: boolean
   error?: string
+  /** 隔离在 Electron utilityProcess 中运行时返回其 OS PID（进程内回退时省略） */
+  utilityProcessPid?: number
+}
+
+/** Agent 运行时进程诊断信息（用于验证隔离进程 PID 与运行状态） */
+export interface AgentHostInfoResult {
+  success: boolean
+  isolated?: boolean
+  mainPid?: number
+  utilityProcessPid?: number | null
+  runningSessionIds?: string[]
+  error?: string
+}
+
+/** Agent utilityProcess 意外退出广播载荷（供渲染层解除流式锁并提示可重试恢复） */
+export interface AgentHostCrashedPayload {
+  workspaceDir: string
+  exitCode: number
+  interruptedSessionIds: string[]
 }
 
 /** 发送给 Agent 的图像附件（base64，不含 data: 前缀） */
@@ -1366,6 +1385,7 @@ export const IPC_INVOKE_CHANNELS = {
 
   // Pi Agent
   agentInitialize: 'agent:initialize',
+  agentHostInfo: 'agent:hostInfo',
   agentChat: 'agent:chat',
   agentAbort: 'agent:abort',
   agentDispose: 'agent:dispose',
@@ -1494,6 +1514,7 @@ export const IPC_EVENT_CHANNELS = {
   onAuxWindowClosed: 'aux:window-closed',
   onAppBootExpanded: 'app:boot-expanded',
   onAgentStream: 'agent:stream',
+  onAgentHostCrashed: 'agent:host-crashed',
   onAgentSessionTitle: 'agent:session-title',
   onNotifyClick: 'app:notify-click',
   onAgentApprovalRequest: 'agent:approval-request',
@@ -1599,6 +1620,7 @@ export interface IpcInvokeContract {
 
   // Pi Agent
   'agent:initialize': { args: [config: AgentInitConfig]; result: AgentInitResult }
+  'agent:hostInfo': { args: [workspaceDir: string]; result: AgentHostInfoResult }
   'agent:chat': {
     args: [
       message: string,
@@ -2007,6 +2029,7 @@ export interface IpcEventContract {
   'aux:window-closed': { payload: string }
   'app:boot-expanded': { payload: void }
   'agent:stream': { payload: AgentStreamPayload }
+  'agent:host-crashed': { payload: AgentHostCrashedPayload }
   'agent:session-title': { payload: { workspaceDir: string; sessionId: string; title: string } }
   'app:notify-click': { payload: NotifyClickPayload }
   'agent:approval-request': { payload: ApprovalRequestPayload }

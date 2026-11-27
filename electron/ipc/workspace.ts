@@ -297,7 +297,7 @@ export function registerWorkspaceIpc(context: WorkspaceIpcContext): void {
       }
       closeWorkspaceWatchersUnder(workspacePath)
       context.terminalManager.closeWorkspace(canonicalizePath(workspacePath) ?? workspacePath)
-      context.pluginManager.unload(workspacePath)
+      await context.pluginManager.unloadAsync(workspacePath)
       disposeCoordinator(workspacePath)
       repoSync.detachWorkspace(workspacePath)
       return { success: true }

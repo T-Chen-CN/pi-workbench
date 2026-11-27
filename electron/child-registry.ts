@@ -16,7 +16,7 @@ import { promisify } from 'util'
 
 const execFileAsync = promisify(execFile)
 
-export type ChildGroup = 'pty' | 'install' | 'git'
+export type ChildGroup = 'pty' | 'install' | 'git' | 'utility'
 
 export interface TrackedChild {
   pid: number

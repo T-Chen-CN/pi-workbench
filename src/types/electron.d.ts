@@ -91,6 +91,8 @@ export type {
   WebSearchSaveResult,
   AgentInitConfig,
   AgentInitResult,
+  AgentHostInfoResult,
+  AgentHostCrashedPayload,
   AgentImagePayload,
   ToolCategory,
   PermissionAction,

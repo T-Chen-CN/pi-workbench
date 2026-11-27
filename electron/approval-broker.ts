@@ -153,6 +153,11 @@ export class ApprovalBroker {
     this.cancelWhere((request) => normalize(request.workspaceDir) === target, reason)
   }
 
+  /** cancelForWorkspace 的语义别名（Agent utilityProcess 异常退出时按工作区取消全部待决审批） */
+  cancelWorkspace(workspaceDir: string, reason = 'The agent process terminated unexpectedly.'): void {
+    this.cancelForWorkspace(workspaceDir, reason)
+  }
+
   /** 会话关闭时取消该会话的待审批请求 */
   cancelForSession(sessionId: string, reason = 'The session was closed.'): void {
     this.cancelWhere((request) => request.sessionId === sessionId, reason)

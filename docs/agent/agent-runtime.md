@@ -7,11 +7,14 @@
 > Pi Agent 的集成方式、权限与审批（安全边界）、计划模式、会话生命周期、标题与压缩、导出、联网扩展。
 > 流式事件与轨迹数据模型见 [AGENT_TRACE](../architecture/AGENT_TRACE.md)；会话记录的真相源见 [ADR-003](../decisions/ADR-003-session-record-single-source.md)。
 
-## 1. 运行位置
+## 1. 运行位置与进程隔离（Phase E）
 
-- Agent **必须**运行在 Electron 主进程，与 `main.ts` 同进程，入口是 `pi-bridge/dist/index.js`（路径由 `app-paths.ts` 的 `getBridgeEntryUrl()` 解析）。
-- ❌ 禁止另起子进程 / Worker / 本地 HTTP 服务承载 Agent。Vite 里的 `devAgentBridge` 只是**调试用替身**，仅在 `serve` 生效。
-- `pi-coding-agent` 内置的 read / write / edit / bash 工具在主进程直接操作文件系统，不经过渲染层 IPC —— 这是设计决定，不是漏洞。应用自身（文件树、编辑器、终端）的文件操作仍必须走 IPC。
+- **默认隔离运行（Electron `utilityProcess`）**：每个打开的工作区在独立的 Electron `utilityProcess` 中承载 `AgentRuntimeHost`（`electron/agent-host-worker.ts`，调用 `pi-bridge`），主进程持有实现 `RegisteredAgent` 契约的代理 `electron/agent-host-client.ts`，并将子进程 PID 登记进 `childRegistry`（`group: 'utility'`）以确保退出时整棵进程树可靠回收。
+- **高频直连流式通道（`MessagePort`）**：主进程通过 `MessageChannelMain` 建链，将 `port1` 转交给 Agent `utilityProcess`、将 `port2` 经 `agent:stream-port` 直接转交给渲染层 `preload.cts`。流式 token / thinking / tool 轨迹事件由 Agent 进程直推渲染层，**零主进程逐 token 中转**；仅在单测或无头环境未绑定端口时回退 `parentPort` → `agent:stream`。
+- **受控宿主 RPC（凭证不越界）**：供应商 API Key 与 OAuth 凭证始终留在主进程的 `safeStorage` 加密存储中，**永不写入环境变量、永不随初始化载荷下发、永不在 utilityProcess 落盘明文**。Agent 进程通过 `CredentialStore` 代理按需走 `host:req`（`credentials:get` / `set` / `delete` / `list` / `has` / `modify`）向主进程请求，并复用主进程的文件锁与 OAuth 刷新互斥锁；模型目录缓存（`modelsStore`）、文档读取（`readDocument`）、工具审批（`requestApproval`）与工作树切换（`onWorktreeSwitch`）同理走受控宿主 RPC。
+- **崩溃自愈**：当 Agent `utilityProcess` 异常退出（非主动 `dispose`）时，`AgentHostClient` 立即拒绝在途 RPC、由主进程通过 `approvalBroker.cancelWorkspace` 解除挂起审批、从 `agentRegistry` 原子摘除失效条目并向全部窗口广播 `agent:host-crashed`（渲染层立即释放流式态）；下一次 `ensureWorkspaceAgent()` / `agent:initialize` / `agent:chat` 会自动拉起全新 `utilityProcess` 无缝恢复。
+- **回退与调试**：仅当 Electron `utilityProcess` 不可用（纯 Node 单测）或显式设置 `PI_AGENT_IN_PROCESS=1` 时回退主进程内 `AgentManager`；Vite 里的 `devAgentBridge` 仍是仅在 `serve` 生效的调试替身，❌ 禁止用本地 HTTP 服务承载生产 Agent。
+- `pi-coding-agent` 内置的 read / write / edit / bash 工具在 Agent `utilityProcess` 内直接操作文件系统，不经过渲染层 IPC —— 这是设计决定，不是漏洞。应用自身（文件树、编辑器、终端）的文件操作仍必须走 IPC。
 
 ### 1.1 聊天附件怎么到 Agent
 
@@ -134,6 +137,7 @@ Pi tool_call 钩子 → AgentManager 归类 + 生成摘要 → ApprovalBroker（
 ## 8. 工作台插件（与 Agent 扩展无关）
 
 - 插件只扩展 Pi Workbench 本身：`PluginApi = { workspaceDir, pluginDir, pluginId, registerCommand, on, log }`，事件为 `workspace:opened` / `file:saved` / `chat:message`。
-- 加载位置：`{workspaceDir}/.pi-workbench/plugins/`，CommonJS 入口 `plugin.json.main`；启用白名单在 `config.json`（`pluginsConfigured: true` 时才把 `enabledPlugins` 当白名单）。
-- ⚠️ 无沙箱、可访问 Node API；❌ 不接受 Pi SDK extensions / custom tools，也不从网络下载插件。
+- 加载位置：`{workspaceDir}/.pi-workbench/plugins/`，CommonJS 入口 `plugin.json.main`；启用白名单与全目录 SHA-256 哈希钉住存储在应用自有目录 `config/workspace-plugins.json`（fail-closed，绝不信任仓库内 `.pi-workbench/config.json`）。
+- **进程隔离（Phase E）**：主进程完成白名单、符号链接与全目录 SHA-256 校验后，仅将校验通过的插件下发到按工作区隔离的 Electron `utilityProcess`（`electron/plugin-host-worker.ts`，环境变量经 `sanitizeChildEnv` 脱敏，PID 登记到 `childRegistry` `utility` 组）。未启用或哈希不匹配的插件甚至不会启动 worker；插件进程异常崩溃不会拖垮主进程或 Agent，并会在下次 `invoke` / `loadWorkspace` 时重新校验哈希后自动拉起。
+- ⚠️ 插件拥有独立进程内的 Node API 能力（非强安全沙箱），❌ 不接受 Pi SDK extensions / custom tools，也不从网络下载插件。
 - 示例：`examples/plugins/git-tools`。

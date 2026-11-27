@@ -35,7 +35,7 @@ import { disposeDiffStore } from './store/diffStore'
 import { useRepoMapStore } from './store/repoMapStore'
 import { useGitStore } from './store/gitStore'
 import { useSelectionStore } from './store/selectionStore'
-import { useChatStore } from './store/chatStore'
+import { conversationKey, useChatStore } from './store/chatStore'
 import { useSessionStore } from './store/sessionStore'
 import { confirmDialog } from './store/dialogStore'
 import { useSettingsStore } from './store/settingsStore'
@@ -520,9 +520,32 @@ export default function App() {
         useSessionStore.getState().markNeedsAction(workspaceDir, sessionId, null)
       }
     })
+    // Agent utilityProcess 意外退出时：清理该工作区挂起流式/压缩态并提示可重试恢复
+    const offHostCrashed = piAgentAPI.onHostCrashed(
+      ({ workspaceDir, exitCode, interruptedSessionIds }) => {
+        const chatState = useChatStore.getState()
+        const crashMessage = `Agent process crashed (exit code ${exitCode}). Send a message to automatically restart.`
+        const targetKeys = new Set<string>(
+          interruptedSessionIds.map((sessionId) => conversationKey(workspaceDir, sessionId))
+        )
+        const prefix = `${workspaceDir}\u0000`
+        for (const [key, conv] of Object.entries(chatState.conversations)) {
+          if (key.startsWith(prefix) && (conv.isLoading || conv.isCompacting)) {
+            targetKeys.add(key)
+          }
+        }
+        for (const key of targetKeys) {
+          chatState.setLoading(key, false)
+          chatState.setCompacting(key, false)
+          chatState.setError(key, crashMessage)
+        }
+        toast.error(crashMessage)
+      }
+    )
     return () => {
       offRequest()
       offResolved()
+      offHostCrashed()
       useApprovalStore.getState().reset()
     }
   }, [])

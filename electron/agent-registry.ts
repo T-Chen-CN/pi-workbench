@@ -47,20 +47,26 @@ export interface RegisteredAgent {
     (
       message: string,
       options?: {
+        requestId?: string
         onTextDelta?: (delta: string) => void
         onTrace?: (event: { type: string; [key: string]: unknown }) => void
+        images?: Array<{ data: string; mimeType: string }>
       }
     ): Promise<AgentChatOutcome>
     (
       sessionId: string,
       message: string,
       options?: {
+        requestId?: string
         onTextDelta?: (delta: string) => void
         onTrace?: (event: { type: string; [key: string]: unknown }) => void
+        images?: Array<{ data: string; mimeType: string }>
       }
     ): Promise<AgentChatOutcome>
   }
   dispose: () => Promise<void> | void
+  /** 运行在独立 utilityProcess 中时返回其 OS PID（进程内回退返回 null） */
+  getPid?: () => number | null
   /** 运行中切换会话工作树；空闲时立即重建，运行中排队到轮次边界 */
   requestSessionRoot?: (
     sessionId: string,
@@ -315,6 +321,15 @@ export class AgentRegistry {
     if (!entry) return
     this.entries.delete(key)
     await disposeAgent(entry.agent, 'agent')
+  }
+
+  /** 仅当登记表中仍是指定实例时才移除（用于 utilityProcess 崩溃自愈，避免误删已重建的新实例） */
+  evictIfSame(workspaceDir: string, agent: RegisteredAgent): boolean {
+    const key = registryKey(workspaceDir)
+    const entry = this.entries.get(key)
+    if (!entry || entry.agent !== agent) return false
+    this.entries.delete(key)
+    return true
   }
 
   /**

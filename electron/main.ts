@@ -1154,13 +1154,13 @@ async function shutdownApplication(): Promise<void> {
         // 云端工单：先把自己标 interrupted 并冲队列（内部 flush 1.5s），超时必须大于 flush 上限
         {
           name: 'cloud-device',
-          timeoutMs: 1800,
+          timeoutMs: 1700,
           run: () => shutdownCloudDeviceAgent()
         },
         { name: 'worktree-deps', timeoutMs: 400, run: () => disposeAllCoordinators() },
         {
           name: 'workspace-tasks',
-          timeoutMs: 400,
+          timeoutMs: 500,
           run: async () => {
             closeAllWorkspaceWatchers()
             repoSync.disposeAll()

@@ -3,14 +3,30 @@
  *
  * 插件只扩展 Pi Workbench 本身（命令 / 钩子），不接入 Pi Agent 的扩展机制。
  * 插件位于 {workspace}/.pi-workbench/plugins/<id>/，由 plugin.json 声明，
- * 入口为 CommonJS 模块并导出 activate(api)。插件运行在主进程，无沙箱。
+ * 入口为 CommonJS 模块并导出 activate(api)。
+ *
+ * 安全与隔离策略：
+ * - 主进程负责清单扫描、应用自有启用白名单校验与全目录 SHA-256 代码哈希校验（fail-closed）；
+ * - 在 Electron 运行时（且未注入单测 requireModule 替身时），仅将校验通过的插件下发到按工作区隔离的
+ *   `utilityProcess`（`plugin-host-worker.js`，环境变量经 `sanitizeChildEnv` 脱敏），崩溃不拖垮主进程与 Agent；
+ * - 纯 Node 单测或注入 `requireModule` 时自动退回进程内加载器。
  */
 import * as fs from 'fs'
 import * as path from 'path'
 import { createHash } from 'crypto'
 import { createRequire } from 'module'
+import { fileURLToPath } from 'url'
 import chokidar, { type FSWatcher as ChokidarFSWatcher } from 'chokidar'
 import { readJsonWithBackup, writeJsonAtomicSync } from './atomic-json.js'
+import { childRegistry, type ChildRegistry } from './child-registry.js'
+import { sanitizeChildEnv } from './env-sanitize.js'
+import type {
+  MainToPluginWorkerMessage,
+  PluginWorkerLoadResult,
+  PluginWorkerRpcMethod,
+  PluginWorkerToMainMessage,
+  VerifiedPluginDescriptor,
+} from './plugin-host-worker.js'
 
 export interface PluginManifest {
   id?: string
@@ -63,13 +79,224 @@ export interface PluginApi {
   log: (...args: unknown[]) => void
 }
 
+export interface PluginUtilityProcessLike {
+  readonly pid?: number
+  readonly stdout?: NodeJS.ReadableStream | null
+  readonly stderr?: NodeJS.ReadableStream | null
+  postMessage(message: unknown, transfer?: unknown[]): void
+  kill(): boolean
+  on(event: 'message', listener: (message: unknown) => void): unknown
+  on(event: 'exit', listener: (code: number) => void): unknown
+  on(event: 'spawn', listener: () => void): unknown
+  on(
+    event: 'error',
+    listener: (type: string, location: string, report: string) => void
+  ): unknown
+}
+
+export type PluginUtilityProcessForkFn = (
+  modulePath: string,
+  args?: string[],
+  options?: {
+    serviceName?: string
+    stdio?: 'inherit' | 'pipe' | 'ignore'
+    env?: NodeJS.ProcessEnv
+  }
+) => PluginUtilityProcessLike
+
 interface LoadedPlugin {
   info: PluginInfo
   directory: string
   entryPath?: string
+  manifest?: PluginManifest
   handlers: Map<string, PluginCommandHandler>
   hooks: Map<string, PluginHookHandler[]>
   deactivate?: () => void | Promise<void>
+}
+
+interface PendingPluginRpc {
+  resolve: (value: unknown) => void
+  reject: (error: Error) => void
+  timer: NodeJS.Timeout
+}
+
+class PluginHostProcess {
+  private child: PluginUtilityProcessLike | null = null
+  private currentPid: number | null = null
+  private unregisterChild: (() => void) | null = null
+  private nextRpcId = 1
+  private readonly pending = new Map<number, PendingPluginRpc>()
+  private disposing = false
+  private disposed = false
+  private crashed = false
+
+  constructor(
+    private readonly workspaceDir: string,
+    private readonly workerModulePath: string,
+    private readonly forkUtilityProcess: PluginUtilityProcessForkFn,
+    private readonly registry: ChildRegistry,
+    private readonly onCrash: (exitCode: number) => void
+  ) {}
+
+  start(): void {
+    if (this.child || this.disposed) return
+    const child = this.forkUtilityProcess(this.workerModulePath, [], {
+      serviceName: 'pi-workbench-plugin-host',
+      stdio: 'pipe',
+      env: sanitizeChildEnv(process.env),
+    })
+    this.child = child
+
+    const trackPid = (): void => {
+      if (this.child !== child || this.disposed) return
+      const pid = child.pid
+      if (typeof pid === 'number' && Number.isInteger(pid) && pid > 0) {
+        this.currentPid = pid
+        this.unregisterChild?.()
+        this.unregisterChild = this.registry.register({
+          pid,
+          group: 'utility',
+          kill: () => {
+            try {
+              child.kill()
+            } catch {
+              // ignore
+            }
+          },
+        })
+      }
+    }
+    trackPid()
+    child.on('spawn', trackPid)
+
+    child.stdout?.on('data', (chunk: Buffer | string) => {
+      const text = String(chunk).trim()
+      if (text) console.log(`[PluginHost:${path.basename(this.workspaceDir)}]`, text.slice(0, 1000))
+    })
+    child.stderr?.on('data', (chunk: Buffer | string) => {
+      const text = String(chunk).trim()
+      if (text) console.warn(`[PluginHost:${path.basename(this.workspaceDir)}]`, text.slice(0, 1000))
+    })
+
+    child.on('message', (raw: unknown) => {
+      if (this.child !== child || !raw || typeof raw !== 'object') return
+      const msg = raw as PluginWorkerToMainMessage
+      if (msg.type === 'ready') return
+      if (msg.type === 'log') {
+        const args = Array.isArray(msg.args) ? msg.args : [msg.args]
+        if (msg.level === 'warn') console.warn(`[Plugin:${msg.pluginId}]`, ...args)
+        else console.log(`[Plugin:${msg.pluginId}]`, ...args)
+        return
+      }
+      if (msg.type === 'rpc:res') {
+        const entry = this.pending.get(msg.id)
+        if (!entry) return
+        this.pending.delete(msg.id)
+        clearTimeout(entry.timer)
+        if (msg.ok) entry.resolve(msg.result)
+        else entry.reject(new Error(msg.error || 'Plugin worker RPC failed'))
+      }
+    })
+
+    child.on('error', (type: string, location: string, report: string) => {
+      console.warn(
+        `[Plugins] UtilityProcess fatal error (${type}) at ${location}:`,
+        report.slice(0, 500)
+      )
+    })
+
+    child.on('exit', (code: number) => {
+      if (this.child !== child) return
+      this.unregisterChild?.()
+      this.unregisterChild = null
+      this.child = null
+      this.currentPid = null
+
+      if (this.disposing || this.disposed) {
+        this.rejectAll(new Error('Plugin worker disposed'))
+        return
+      }
+      this.crashed = true
+      this.rejectAll(new Error(`Plugin process crashed (exit code ${code})`))
+      console.warn(
+        `[Plugins] Plugin utilityProcess exited unexpectedly (code=${code}, workspace=${this.workspaceDir})`
+      )
+      this.onCrash(code)
+    })
+  }
+
+  getPid(): number | null {
+    return this.currentPid ?? this.child?.pid ?? null
+  }
+
+  isAlive(): boolean {
+    return this.child !== null && !this.disposed && !this.crashed
+  }
+
+  killForTest(): boolean {
+    if (!this.child) return false
+    return this.child.kill()
+  }
+
+  call<T>(method: PluginWorkerRpcMethod, payload: unknown, timeoutMs: number): Promise<T> {
+    if (!this.child || this.disposed || this.crashed) {
+      return Promise.reject(new Error('Plugin process is not running'))
+    }
+    const id = this.nextRpcId++
+    const child = this.child
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id)
+        reject(new Error(`Plugin RPC "${method}" timed out after ${timeoutMs}ms`))
+      }, timeoutMs)
+      timer.unref?.()
+      this.pending.set(id, {
+        resolve: resolve as (value: unknown) => void,
+        reject,
+        timer,
+      })
+      const req: MainToPluginWorkerMessage = { type: 'rpc:req', id, method, payload }
+      try {
+        child.postMessage(req)
+      } catch (error) {
+        this.pending.delete(id)
+        clearTimeout(timer)
+        reject(error instanceof Error ? error : new Error(String(error)))
+      }
+    })
+  }
+
+  async dispose(): Promise<void> {
+    if (this.disposed) return
+    this.disposing = true
+    const child = this.child
+    if (child && !this.crashed) {
+      try {
+        await this.call('dispose', {}, 1_000)
+      } catch {
+        // 超时或进程已退出时直接强杀
+      }
+      try {
+        child.kill()
+      } catch {
+        // ignore
+      }
+    }
+    this.disposed = true
+    this.unregisterChild?.()
+    this.unregisterChild = null
+    this.child = null
+    this.currentPid = null
+    this.rejectAll(new Error('Plugin worker disposed'))
+  }
+
+  private rejectAll(error: Error): void {
+    for (const [id, entry] of [...this.pending.entries()]) {
+      this.pending.delete(id)
+      clearTimeout(entry.timer)
+      entry.reject(error)
+    }
+  }
 }
 
 interface WorkspacePlugins {
@@ -78,6 +305,9 @@ interface WorkspacePlugins {
   commands: Map<string, { plugin: LoadedPlugin; handler: PluginCommandHandler; info: PluginCommandInfo }>
   watcher: ChokidarFSWatcher | null
   reloadTimer: NodeJS.Timeout | null
+  worker: PluginHostProcess | null
+  workerReady: Promise<void> | null
+  workerCrashed: boolean
 }
 
 export interface PluginManagerOptions {
@@ -89,9 +319,39 @@ export interface PluginManagerOptions {
   onChanged?: (workspaceDir: string) => void
   /** 插件启用白名单文件（必须位于应用自有目录，绝不能读工作区内的不可信配置） */
   stateFilePath?: string
+  /** 是否在 Electron 运行时启用每工作区独立 utilityProcess 隔离（默认 true） */
+  isolateInUtilityProcess?: boolean
+  /** 替换 utilityProcess.fork（测试用） */
+  forkUtilityProcess?: PluginUtilityProcessForkFn
+  /** 替换编译后的 plugin-host-worker.js 路径（测试用） */
+  workerModulePath?: string
+  /** 替换 childRegistry（测试用） */
+  childRegistry?: ChildRegistry
+  /** 插件 RPC 超时上限（毫秒，默认 30_000） */
+  rpcTimeoutMs?: number
 }
 
+const DEFAULT_PLUGIN_RPC_TIMEOUT_MS = 30_000
 const requireFromHere = createRequire(import.meta.url)
+
+function defaultPluginHostWorkerPath(): string {
+  return fileURLToPath(new URL('./plugin-host-worker.js', import.meta.url))
+}
+
+function resolveElectronUtilityFork(): PluginUtilityProcessForkFn | null {
+  // 纯 Node / Vitest 环境里 require('electron') 返回二进制路径字符串，仅真实 Electron 运行时才加载
+  if (!process.versions.electron) return null
+  try {
+    const mod = requireFromHere('electron') as {
+      utilityProcess?: { fork?: PluginUtilityProcessForkFn }
+    }
+    return typeof mod?.utilityProcess?.fork === 'function'
+      ? mod.utilityProcess.fork.bind(mod.utilityProcess)
+      : null
+  } catch {
+    return null
+  }
+}
 
 /** 清理插件目录及其所有子模块的 require.cache，避免热重载残留旧闭包 */
 function purgePluginRequireCache(pluginRoot: string, entryPath: string): void {
@@ -162,6 +422,30 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+function resolveVerifiedEntryPath(directory: string, manifest: PluginManifest): {
+  realRoot: string
+  entryPath: string
+} {
+  const mainFile = typeof manifest.main === 'string' && manifest.main ? manifest.main : 'index.js'
+  const root = path.resolve(directory)
+  const entryCandidate = path.resolve(root, mainFile)
+
+  if (entryCandidate !== root && !entryCandidate.startsWith(root + path.sep)) {
+    throw new Error('Plugin "main" must stay inside its own directory')
+  }
+  if (!fs.existsSync(entryCandidate)) {
+    throw new Error(`Plugin entry not found: ${mainFile}`)
+  }
+
+  // 词法检查挡不住指向目录外的符号链接，入口必须用 realpath 再校验一次
+  const realRoot = fs.realpathSync.native(root)
+  const entryPath = fs.realpathSync.native(entryCandidate)
+  if (entryPath !== realRoot && !entryPath.startsWith(realRoot + path.sep)) {
+    throw new Error('Plugin entry must stay inside its own directory')
+  }
+  return { realRoot, entryPath }
+}
+
 export class PluginManager {
   private readonly options: PluginManagerOptions
   private readonly workspaces = new Map<string, WorkspacePlugins>()
@@ -175,6 +459,19 @@ export class PluginManager {
     return process.platform === 'win32' ? resolved.toLowerCase() : resolved
   }
 
+  private resolveUtilityFork(): PluginUtilityProcessForkFn | null {
+    if (this.options.requireModule) return null
+    if (this.options.isolateInUtilityProcess === false) return null
+    if (this.options.forkUtilityProcess) return this.options.forkUtilityProcess
+    try {
+      const workerPath = this.options.workerModulePath ?? defaultPluginHostWorkerPath()
+      if (!workerPath.endsWith('.js') || !fs.existsSync(workerPath)) return null
+    } catch {
+      return null
+    }
+    return resolveElectronUtilityFork()
+  }
+
   /** 加载（或重新加载）某个工作区的插件 */
   loadWorkspace(workspaceDir: string): PluginInfo[] {
     this.unload(workspaceDir)
@@ -186,6 +483,9 @@ export class PluginManager {
       commands: new Map(),
       watcher: null,
       reloadTimer: null,
+      worker: null,
+      workerReady: null,
+      workerCrashed: false,
     }
     this.workspaces.set(this.mapKey(workspaceDir), state)
 
@@ -199,25 +499,37 @@ export class PluginManager {
     const pinnedHashes = this.readPinnedHashes(workspaceDir)
     let entries: fs.Dirent[] = []
     try {
-      entries = fs.readdirSync(pluginsDir, { withFileTypes: true }).filter((entry) => entry.isDirectory())
+      entries = fs
+        .readdirSync(pluginsDir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
     } catch (error) {
       console.warn('[Plugins] Failed to read plugins directory:', error)
     }
 
+    const utilityFork = this.resolveUtilityFork()
     const seenIds = new Set<string>()
     const revokedIds = new Set<string>()
+    const verifiedForWorker: Array<{
+      plugin: LoadedPlugin
+      descriptor: VerifiedPluginDescriptor
+    }> = []
+
     for (const entry of entries) {
       const directory = path.join(pluginsDir, entry.name)
-      const plugin = this.loadPlugin(
+      const loaded = this.loadPlugin(
         directory,
         entry.name,
         enabledIds,
         pinnedHashes,
         workspaceDir,
         seenIds,
-        revokedIds
+        revokedIds,
+        utilityFork !== null
       )
-      state.plugins.push(plugin)
+      state.plugins.push(loaded.plugin)
+      if (loaded.descriptor) {
+        verifiedForWorker.push({ plugin: loaded.plugin, descriptor: loaded.descriptor })
+      }
     }
 
     // 哈希缺失/变化或含符号链接时撤销持久化启用授权，强制要求用户显式重新启用
@@ -228,9 +540,130 @@ export class PluginManager {
       this.writeEnabledIds(workspaceDir, remainingEnabled, remainingHashes)
     }
 
+    if (utilityFork && verifiedForWorker.length > 0) {
+      this.spawnWorkspaceWorker(state, workspaceDir, verifiedForWorker, utilityFork)
+    }
+
     this.rebuildCommandIndex(state)
     this.startWatcher(workspaceDir, pluginsDir, state)
     return this.listWorkspace(state)
+  }
+
+  private spawnWorkspaceWorker(
+    state: WorkspacePlugins,
+    workspaceDir: string,
+    verified: Array<{ plugin: LoadedPlugin; descriptor: VerifiedPluginDescriptor }>,
+    utilityFork: PluginUtilityProcessForkFn
+  ): void {
+    const workerPath = this.options.workerModulePath ?? defaultPluginHostWorkerPath()
+    const registry = this.options.childRegistry ?? childRegistry
+    const rpcTimeoutMs = this.options.rpcTimeoutMs ?? DEFAULT_PLUGIN_RPC_TIMEOUT_MS
+    const worker = new PluginHostProcess(workspaceDir, workerPath, utilityFork, registry, () => {
+      if (this.workspaces.get(this.mapKey(workspaceDir)) !== state) return
+      if (state.worker !== worker) return
+      state.worker = null
+      state.workerReady = null
+      state.workerCrashed = true
+    })
+    state.worker = worker
+    worker.start()
+
+    // 同步阶段先用 manifest 声明填充命令占位，待 worker load-plugins 返回后再以实际注册命令刷新
+    for (const { plugin, descriptor } of verified) {
+      for (const declared of descriptor.declaredCommands) {
+        if (!declared?.id) continue
+        plugin.info.commands.push({
+          id: declared.id,
+          title: declared.title ?? declared.id,
+          ...(declared.description !== undefined ? { description: declared.description } : {}),
+          pluginId: plugin.info.id,
+          pluginName: plugin.info.name,
+        })
+        plugin.handlers.set(declared.id, (args?: unknown) =>
+          worker.call<PluginCommandResult>(
+            'invoke-command',
+            { commandId: declared.id, args },
+            rpcTimeoutMs
+          )
+        )
+      }
+    }
+
+    state.workerReady = worker
+      .call<PluginWorkerLoadResult>(
+        'load-plugins',
+        {
+          workspaceDir,
+          plugins: verified.map((item) => item.descriptor),
+        },
+        rpcTimeoutMs
+      )
+      .then((result) => {
+        if (this.workspaces.get(this.mapKey(workspaceDir)) !== state) return
+        if (state.worker !== worker) return
+        const byId = new Map(result.plugins.map((item) => [item.id, item]))
+        let changed = false
+        for (const { plugin } of verified) {
+          const outcome = byId.get(plugin.info.id)
+          if (!outcome) continue
+          const prevCommandsJson = JSON.stringify(plugin.info.commands)
+          const prevError = plugin.info.error
+          plugin.info.commands = outcome.commands.map((cmd) => ({ ...cmd }))
+          plugin.info.error = outcome.error
+          plugin.handlers.clear()
+          if (!outcome.error) {
+            for (const cmd of outcome.commands) {
+              plugin.handlers.set(cmd.id, (args?: unknown) =>
+                worker.call<PluginCommandResult>(
+                  'invoke-command',
+                  { commandId: cmd.id, args },
+                  rpcTimeoutMs
+                )
+              )
+            }
+          }
+          if (JSON.stringify(plugin.info.commands) !== prevCommandsJson || plugin.info.error !== prevError) {
+            changed = true
+          }
+        }
+        this.rebuildCommandIndex(state)
+        if (changed) {
+          this.options.onChanged?.(workspaceDir)
+        }
+      })
+      .catch((error: unknown) => {
+        if (this.workspaces.get(this.mapKey(workspaceDir)) !== state) return
+        const message = errorMessage(error)
+        console.warn(`[Plugins] Failed to load plugins in utilityProcess for ${workspaceDir}:`, message)
+        for (const { plugin } of verified) {
+          if (!plugin.info.error) {
+            plugin.info.error = message
+          }
+          plugin.info.commands = []
+          plugin.handlers.clear()
+        }
+        this.rebuildCommandIndex(state)
+      })
+  }
+
+  /** 等待该工作区隔离插件 worker 完成初始化并返回最新插件清单（非隔离模式下立即解析） */
+  async whenReady(workspaceDir: string): Promise<PluginInfo[]> {
+    const state = this.workspaces.get(this.mapKey(workspaceDir))
+    if (!state) return this.list(workspaceDir)
+    if (state.workerReady) {
+      await state.workerReady.catch(() => undefined)
+    }
+    return this.listWorkspace(state)
+  }
+
+  /** 返回该工作区插件 utilityProcess 的 OS PID（非隔离或未启动返回 null） */
+  getWorkerPid(workspaceDir: string): number | null {
+    return this.workspaces.get(this.mapKey(workspaceDir))?.worker?.getPid() ?? null
+  }
+
+  /** 测试用：强杀该工作区的插件 utilityProcess 以验证崩溃自愈 */
+  killWorkerForTest(workspaceDir: string): boolean {
+    return this.workspaces.get(this.mapKey(workspaceDir))?.worker?.killForTest() ?? false
   }
 
   /** 当前工作区的插件信息 */
@@ -251,8 +684,21 @@ export class PluginManager {
     commandId: string,
     args?: unknown
   ): Promise<PluginCommandResult> {
-    const state = this.workspaces.get(this.mapKey(workspaceDir))
-    const command = state?.commands.get(commandId)
+    let state = this.workspaces.get(this.mapKey(workspaceDir))
+    if (!state) {
+      return { success: false, error: `Unknown command: ${commandId}` }
+    }
+    if (state.workerCrashed) {
+      // 插件进程异常退出后，在下一次调用时重新校验哈希并拉起新 worker 自愈
+      this.loadWorkspace(workspaceDir)
+      state = this.workspaces.get(this.mapKey(workspaceDir))
+      if (!state) return { success: false, error: `Unknown command: ${commandId}` }
+    }
+    if (state.workerReady) {
+      await state.workerReady.catch(() => undefined)
+    }
+
+    const command = state.commands.get(commandId)
     if (!command) {
       return { success: false, error: `Unknown command: ${commandId}` }
     }
@@ -269,6 +715,21 @@ export class PluginManager {
   async emit(workspaceDir: string, event: string, payload: unknown): Promise<void> {
     const state = this.workspaces.get(this.mapKey(workspaceDir))
     if (!state) return
+
+    if (state.workerReady) {
+      await state.workerReady.catch(() => undefined)
+    }
+
+    if (state.worker) {
+      if (!state.worker.isAlive()) return
+      const timeoutMs = Math.min(this.options.rpcTimeoutMs ?? DEFAULT_PLUGIN_RPC_TIMEOUT_MS, 15_000)
+      try {
+        await state.worker.call('emit-hook', { event, payload }, timeoutMs)
+      } catch (error) {
+        console.warn(`[Plugins] Hook "${event}" failed in utilityProcess:`, error)
+      }
+      return
+    }
 
     for (const plugin of state.plugins) {
       const handlers = plugin.hooks.get(event)
@@ -347,7 +808,7 @@ export class PluginManager {
     }
   }
 
-  /** 异步卸载：等待插件的异步 deactivate() 收尾完成 */
+  /** 异步卸载：等待插件的异步 deactivate() 与 utilityProcess 收尾完成 */
   async unloadAsync(workspaceDir: string): Promise<void> {
     const pending = this.unloadInternal(workspaceDir)
     if (pending.length > 0) {
@@ -371,21 +832,28 @@ export class PluginManager {
       pending.push(closing)
     }
 
-    for (const plugin of state.plugins) {
-      try {
-        const res = plugin.deactivate?.()
-        if (res && typeof (res as Promise<unknown>).then === 'function') {
-          pending.push(
-            Promise.resolve(res).catch((error) => {
-              console.warn(`[Plugins] deactivate failed for ${plugin.info.id}:`, error)
-            })
-          )
+    if (state.worker) {
+      const worker = state.worker
+      state.worker = null
+      state.workerReady = null
+      pending.push(worker.dispose())
+    } else {
+      for (const plugin of state.plugins) {
+        try {
+          const res = plugin.deactivate?.()
+          if (res && typeof (res as Promise<unknown>).then === 'function') {
+            pending.push(
+              Promise.resolve(res).catch((error) => {
+                console.warn(`[Plugins] deactivate failed for ${plugin.info.id}:`, error)
+              })
+            )
+          }
+        } catch (error) {
+          console.warn(`[Plugins] deactivate failed for ${plugin.info.id}:`, error)
         }
-      } catch (error) {
-        console.warn(`[Plugins] deactivate failed for ${plugin.info.id}:`, error)
-      }
-      if (plugin.entryPath) {
-        purgePluginRequireCache(plugin.directory, plugin.entryPath)
+        if (plugin.entryPath) {
+          purgePluginRequireCache(plugin.directory, plugin.entryPath)
+        }
       }
     }
 
@@ -412,8 +880,9 @@ export class PluginManager {
     pinnedHashes: Record<string, string>,
     workspaceDir: string,
     seenIds: Set<string>,
-    revokedIds: Set<string>
-  ): LoadedPlugin {
+    revokedIds: Set<string>,
+    isolated: boolean
+  ): { plugin: LoadedPlugin; descriptor?: VerifiedPluginDescriptor } {
     const manifestPath = path.join(directory, 'plugin.json')
     let manifest: PluginManifest = {}
 
@@ -421,16 +890,18 @@ export class PluginManager {
       manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as PluginManifest
     } catch (error) {
       return {
-        info: {
-          id: fallbackId,
-          name: fallbackId,
-          enabled: false,
-          commands: [],
-          error: `Invalid plugin.json: ${errorMessage(error)}`,
+        plugin: {
+          info: {
+            id: fallbackId,
+            name: fallbackId,
+            enabled: false,
+            commands: [],
+            error: `Invalid plugin.json: ${errorMessage(error)}`,
+          },
+          directory,
+          handlers: new Map(),
+          hooks: new Map(),
         },
-        directory,
-        handlers: new Map(),
-        hooks: new Map(),
       }
     }
 
@@ -446,6 +917,7 @@ export class PluginManager {
         commands: [],
       },
       directory,
+      manifest,
       handlers: new Map(),
       hooks: new Map(),
     }
@@ -455,11 +927,11 @@ export class PluginManager {
       plugin.info.enabled = false
       plugin.info.error = `Duplicate plugin id: ${id}`
       console.warn(`[Plugins] Duplicate plugin id "${id}" in ${directory}; ignored`)
-      return plugin
+      return { plugin }
     }
     seenIds.add(id)
 
-    if (!enabled) return plugin
+    if (!enabled) return { plugin }
 
     // 代码哈希钉住校验（fail-closed）：缺少哈希、目录含符号链接或内容变更一律拒绝执行并撤销授权，需用户显式重新启用
     const expectedHash = pinnedHashes[id]
@@ -468,8 +940,10 @@ export class PluginManager {
       plugin.info.error =
         'Plugin code hash is missing; re-enable the plugin to approve and pin its current code.'
       revokedIds.add(id)
-      console.warn(`[Plugins] Missing pinned hash for "${id}" in ${directory}; refusing auto-activation`)
-      return plugin
+      console.warn(
+        `[Plugins] Missing pinned hash for "${id}" in ${directory}; refusing auto-activation`
+      )
+      return { plugin }
     }
 
     let actualHash: string
@@ -480,7 +954,7 @@ export class PluginManager {
       plugin.info.error = errorMessage(error)
       revokedIds.add(id)
       console.warn(`[Plugins] Failed to verify plugin hash for "${id}" in ${directory}:`, error)
-      return plugin
+      return { plugin }
     }
 
     if (actualHash !== expectedHash) {
@@ -491,7 +965,34 @@ export class PluginManager {
       console.warn(
         `[Plugins] Hash mismatch for "${id}" in ${directory}; disabled pending explicit re-enable`
       )
-      return plugin
+      return { plugin }
+    }
+
+    if (isolated) {
+      try {
+        const { realRoot, entryPath } = resolveVerifiedEntryPath(directory, manifest)
+        plugin.entryPath = entryPath
+        const declaredCommands = Array.isArray(manifest.contributes?.commands)
+          ? manifest.contributes.commands.filter(
+              (cmd): cmd is { id: string; title?: string; description?: string } =>
+                Boolean(cmd && typeof cmd.id === 'string' && cmd.id)
+            )
+          : []
+        return {
+          plugin,
+          descriptor: {
+            id: plugin.info.id,
+            name: plugin.info.name,
+            directory: realRoot,
+            entryPath,
+            declaredCommands,
+          },
+        }
+      } catch (error) {
+        plugin.info.error = errorMessage(error)
+        console.warn(`[Plugins] Failed to verify entry for ${id}:`, error)
+        return { plugin }
+      }
     }
 
     try {
@@ -501,7 +1002,7 @@ export class PluginManager {
       console.warn(`[Plugins] Failed to activate ${id}:`, error)
     }
 
-    return plugin
+    return { plugin }
   }
 
   private activatePlugin(
@@ -510,23 +1011,7 @@ export class PluginManager {
     directory: string,
     workspaceDir: string
   ): void {
-    const mainFile = typeof manifest.main === 'string' && manifest.main ? manifest.main : 'index.js'
-    const root = path.resolve(directory)
-    const entryCandidate = path.resolve(root, mainFile)
-
-    if (entryCandidate !== root && !entryCandidate.startsWith(root + path.sep)) {
-      throw new Error('Plugin "main" must stay inside its own directory')
-    }
-    if (!fs.existsSync(entryCandidate)) {
-      throw new Error(`Plugin entry not found: ${mainFile}`)
-    }
-
-    // 词法检查挡不住指向目录外的符号链接，入口必须用 realpath 再校验一次
-    const realRoot = fs.realpathSync.native(root)
-    const entryPath = fs.realpathSync.native(entryCandidate)
-    if (entryPath !== realRoot && !entryPath.startsWith(realRoot + path.sep)) {
-      throw new Error('Plugin entry must stay inside its own directory')
-    }
+    const { realRoot, entryPath } = resolveVerifiedEntryPath(directory, manifest)
 
     const moduleExports = (
       this.options.requireModule
@@ -650,7 +1135,12 @@ export class PluginManager {
       return this.memoryHashes.get(key) ?? {}
     }
     const entry = this.readStateStore()[key]
-    if (!entry || typeof entry !== 'object' || !entry.pluginHashes || typeof entry.pluginHashes !== 'object') {
+    if (
+      !entry ||
+      typeof entry !== 'object' ||
+      !entry.pluginHashes ||
+      typeof entry.pluginHashes !== 'object'
+    ) {
       return {}
     }
     const out: Record<string, string> = {}
@@ -678,7 +1168,7 @@ export class PluginManager {
   }
 
   private isEnabled(id: string, enabledIds: string[] | null): boolean {
-    // 默认禁用：插件在主进程拥有完整 Node 权限，不能在打开工作区时自动执行
+    // 默认禁用：不能在打开工作区时自动执行仓库内插件
     return enabledIds !== null && enabledIds.includes(id)
   }
 

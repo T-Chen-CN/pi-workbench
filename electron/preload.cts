@@ -3,6 +3,7 @@ import {
   buildPreloadEventApi,
   buildPreloadInvokeApi,
   IPC_SEND_CHANNELS,
+  type AgentStreamPayload,
   type CloudClientOutgoingFrame,
   type CloudClientState,
   type CloudConfigInput,
@@ -29,6 +30,54 @@ const eventApi = buildPreloadEventApi((channel, listener) => {
   }
 })
 
+/** 直连 Agent utilityProcess 的 MessagePort 接口（preload tsconfig 不含 DOM lib，独立声明最小形状） */
+interface PreloadStreamPort {
+  onmessage: ((event: { data: unknown }) => void) | null
+  start?: () => void
+  close?: () => void
+}
+
+const agentStreamCallbacks = new Set<(payload: AgentStreamPayload) => void>()
+const agentStreamPorts = new Map<string, PreloadStreamPort>()
+
+// 接收主进程转交的 Agent utilityProcess 直连流端口，高频 token 不再经主进程逐条中转
+ipcRenderer.on('agent:stream-port', (event: IpcRendererEvent, meta: unknown) => {
+  const ports = (event as IpcRendererEvent & { ports?: readonly PreloadStreamPort[] }).ports
+  const port = ports?.[0]
+  if (!port) return
+  const record =
+    meta && typeof meta === 'object' ? (meta as { workspaceDir?: unknown; portId?: unknown }) : {}
+  const key =
+    typeof record.workspaceDir === 'string' && record.workspaceDir
+      ? record.workspaceDir
+      : typeof record.portId === 'string' && record.portId
+        ? record.portId
+        : `port-${agentStreamPorts.size + 1}`
+
+  const previous = agentStreamPorts.get(key)
+  if (previous && previous !== port) {
+    previous.onmessage = null
+    try {
+      previous.close?.()
+    } catch {
+      // 忽略陈旧端口关闭异常
+    }
+  }
+
+  agentStreamPorts.set(key, port)
+  port.onmessage = (msgEvent: { data: unknown }) => {
+    const payload = msgEvent.data as AgentStreamPayload
+    for (const callback of [...agentStreamCallbacks]) {
+      try {
+        callback(payload)
+      } catch (error) {
+        console.error('[Preload] Agent stream listener failed:', error)
+      }
+    }
+  }
+  port.start?.()
+})
+
 const electronAPI: ElectronAPIContract = {
   platform: process.platform,
   /** Windows / Linux 主窗口与辅助窗口启用原生 titleBarOverlay，渲染层不再重复绘制窗口按钮 */
@@ -36,6 +85,16 @@ const electronAPI: ElectronAPIContract = {
 
   ...invokeApi,
   ...eventApi,
+
+  // 同时订阅直连 MessagePort 与主进程 agent:stream 兜底通道（测试与非端口回退路径继续可用）
+  onAgentStream: (callback: (payload: AgentStreamPayload) => void) => {
+    agentStreamCallbacks.add(callback)
+    const offFallback = eventApi.onAgentStream(callback)
+    return () => {
+      agentStreamCallbacks.delete(callback)
+      offFallback()
+    }
+  },
 
   // 剪贴板：pw-app:// 不是浏览器认可的可信来源，navigator.clipboard.writeText 会被拒绝。
   // sandbox preload 里没有 clipboard 模块，转给主进程写系统剪贴板并规范为字符串。

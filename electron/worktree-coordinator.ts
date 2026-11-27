@@ -537,6 +537,15 @@ export class WorktreeCoordinator {
     return { key, path: target, branch: record?.branch ?? null }
   }
 
+  /** 返回所有已绑定会话到其工作树根路径的快照，供独立进程中的 Agent 同步解析工作树根 */
+  getSessionRootsSnapshot(): Record<string, string> {
+    const snapshot: Record<string, string> = {}
+    for (const sessionId of Object.keys(this.state.data.sessions)) {
+      snapshot[sessionId] = this.getSessionRoot(sessionId)
+    }
+    return snapshot
+  }
+
   /**
    * 手动触发 / 重试某个工作树的依赖安装。
    * 不阻塞调用方：立刻返回 `installing` 或 `ready`，结果由 `git:worktree-deps` 推送。

@@ -6,6 +6,8 @@
  */
 
 import type {
+  AgentHostCrashedPayload,
+  AgentHostInfoResult,
   AgentImagePayload,
   AgentStreamEvent,
   ApprovalDecision,
@@ -41,6 +43,7 @@ interface AgentResponse {
   success: boolean
   message?: string
   error?: string
+  utilityProcessPid?: number
 }
 
 interface AgentUsage {
@@ -297,6 +300,26 @@ export const piAgentAPI = {
       return () => {}
     }
     return window.electronAPI.onAgentSessionTitle(callback)
+  },
+
+  /** 监听 Agent utilityProcess 意外退出事件，供 UI 立即释放流式态并提示重试恢复 */
+  onHostCrashed(callback: (payload: AgentHostCrashedPayload) => void): () => void {
+    if (!hasElectronAgent() || typeof window.electronAPI.onAgentHostCrashed !== 'function') {
+      return () => {}
+    }
+    return window.electronAPI.onAgentHostCrashed(callback)
+  },
+
+  /** 查询当前工作区 Agent 宿主进程信息（含隔离 utilityProcess PID） */
+  async hostInfo(workspaceDir: string): Promise<AgentHostInfoResult> {
+    if (!hasElectronAgent() || typeof window.electronAPI.agentHostInfo !== 'function') {
+      return { success: false, error: 'Host info is only available in the Electron app' }
+    }
+    try {
+      return await window.electronAPI.agentHostInfo(workspaceDir)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
   },
 
   async sessionsList(workspaceDir: string): Promise<SessionListResult> {
