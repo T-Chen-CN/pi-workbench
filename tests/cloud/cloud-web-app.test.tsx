@@ -382,7 +382,9 @@ describe('云端 Web 控制台主界面', () => {
     expect(body?.querySelectorAll('ul li').length).toBe(2)
     expect(body?.textContent).toContain('const ok = true')
     expect(body?.textContent).toContain('nested')
-    expect(body?.querySelector('.katex')).not.toBeNull()
+    await waitFor(() => {
+      expect(body?.querySelector('.katex')).not.toBeNull()
+    })
 
     const anchors = [...(body?.querySelectorAll('a') ?? [])]
     expect(anchors.length).toBe(1)
@@ -623,5 +625,96 @@ describe('云端 Web 控制台主界面', () => {
       expect(markReads).toHaveLength(1)
       expect(markReads[0].seq).toBe(101)
     })
+  })
+
+  it('移除设备、撤销授权与删除记忆均需二次弹窗确认，取消不发 DELETE', async () => {
+    const deleteCalls: string[] = []
+    routes['GET /v1/devices'] = () =>
+      jsonResult({
+        devices: [
+          { id: 'dev-del', name: '待移除设备', platform: 'win32', online: true, workspaces: [] },
+        ],
+      })
+    routes['GET /v1/authorizations'] = () =>
+      jsonResult({
+        authorizations: [
+          {
+            id: 'auth-del',
+            used: 1,
+            quota: 5,
+            expiresAt: Date.now() + 3600_000,
+            confirmedSummary: '测试授权',
+            items: [{ deviceId: 'dev-del', workspacePath: '/repo' }],
+          },
+        ],
+      })
+    routes['DELETE /v1/devices/dev-del'] = () => {
+      deleteCalls.push('device:dev-del')
+      return jsonResult({ ok: true })
+    }
+    routes['DELETE /v1/authorizations/auth-del'] = () => {
+      deleteCalls.push('auth:auth-del')
+      return jsonResult({ ok: true })
+    }
+    routes['DELETE /v1/memories/mem-1'] = () => {
+      deleteCalls.push('memory:mem-1')
+      return jsonResult({ ok: true })
+    }
+
+    await mountApp()
+    await screen.findByText('待移除设备')
+    await screen.findByText('测试授权')
+
+    // 1. 移除设备：点移除弹确认框，取消不删，再次确认才删
+    fireEvent.click(screen.getByRole('button', { name: '移除' }))
+    expect(screen.getByRole('dialog')).toBeTruthy()
+    expect(deleteCalls).toHaveLength(0)
+    fireEvent.click(screen.getByRole('button', { name: '取消' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(deleteCalls).toHaveLength(0)
+
+    fireEvent.click(screen.getByRole('button', { name: '移除' }))
+    fireEvent.click(screen.getByRole('button', { name: '确认移除' }))
+    await waitFor(() => expect(deleteCalls).toContain('device:dev-del'))
+
+    // 2. 撤销授权：二次确认
+    fireEvent.click(screen.getByRole('button', { name: '撤销' }))
+    expect(screen.getByRole('dialog')).toBeTruthy()
+    expect(deleteCalls).not.toContain('auth:auth-del')
+    fireEvent.click(screen.getByRole('button', { name: '确认撤销' }))
+    await waitFor(() => expect(deleteCalls).toContain('auth:auth-del'))
+
+    // 3. 删除记忆：二次确认
+    fireEvent.click(screen.getByRole('tab', { name: '记忆' }))
+    await screen.findByText('旧记忆内容')
+    fireEvent.click(screen.getByRole('button', { name: '删除' }))
+    expect(screen.getByRole('dialog')).toBeTruthy()
+    expect(deleteCalls).not.toContain('memory:mem-1')
+    fireEvent.click(screen.getByRole('button', { name: '确认删除' }))
+    await waitFor(() => expect(deleteCalls).toContain('memory:mem-1'))
+    await waitFor(() => expect(screen.queryByText('旧记忆内容')).toBeNull())
+  })
+
+  it('移动端安全区类名、可访问 aria-label 与长 bannerError 自动换行生效', async () => {
+    const { socket } = await mountApp()
+
+    expect(document.documentElement.getAttribute('data-cloud-web')).toBe('true')
+    expect(document.querySelector('header.top')?.className).toContain('safe-top')
+    expect(document.querySelector('footer.bottom')?.className).toContain('safe-bottom')
+    expect(screen.getByLabelText('发送给云端 Agent 的消息')).toBeTruthy()
+
+    const longErr = '错误详情：' + 'very-long-diagnostic-token-'.repeat(8)
+    emitFrame(socket, { v: 1, type: 'error', message: longErr })
+
+    const alert = await screen.findByRole('alert')
+    const msgEl = alert.querySelector('span[title]') as HTMLSpanElement
+    expect(msgEl).not.toBeNull()
+    expect(msgEl.getAttribute('title')).toBe(longErr)
+    expect(msgEl.className).toContain('break-words')
+    expect(msgEl.className).not.toContain('truncate')
+
+    fireEvent.click(screen.getByRole('tab', { name: '记忆' }))
+    expect(await screen.findByLabelText('新增长期记忆内容')).toBeTruthy()
+    expect(screen.getByLabelText('编辑 AGENTS.md 文档内容')).toBeTruthy()
   })
 })

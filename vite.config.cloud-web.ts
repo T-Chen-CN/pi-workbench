@@ -1,6 +1,11 @@
+import { readFileSync } from 'node:fs'
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
+
+const rootPkg = JSON.parse(readFileSync(path.resolve(__dirname, 'package.json'), 'utf-8')) as {
+  version?: string
+}
 
 /** 过滤 @fontsource 中非中/英字体子集（西里尔/天城文/希腊/越南语），显著缩减公网包与内存占用 */
 const DROP_FONT_SUBSETS = /(?:cyrillic|devanagari|greek|vietnamese)/i
@@ -29,6 +34,9 @@ export default defineConfig({
   root: path.resolve(__dirname, 'apps/cloud/web-src'),
   publicDir: path.resolve(__dirname, 'apps/cloud/web-src/public'),
   base: '/',
+  define: {
+    __PI_CLOUD_WEB_VERSION__: JSON.stringify(rootPkg.version || '0.0.0'),
+  },
   plugins: [fontSubsetFilter(), react()],
   css: {
     postcss: path.resolve(__dirname, 'postcss.config.js'),

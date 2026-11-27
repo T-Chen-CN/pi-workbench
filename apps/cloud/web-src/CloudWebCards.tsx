@@ -12,6 +12,7 @@ import {
   DataText,
   Field,
   Input,
+  Modal,
   Select,
   StatusText,
   Textarea,
@@ -44,6 +45,46 @@ export type WebRequestFn = <T = any>(method: string, path: string, body?: unknow
 export type WebSendFn = (frame: Record<string, unknown>) => boolean
 export type FeedbackTone = 'info' | 'error'
 type FeedbackState = { text: string; tone: FeedbackTone } | null
+
+const ConfirmDangerModal: React.FC<{
+  open: boolean
+  title: string
+  description: string
+  confirmLabel: string
+  busy?: boolean
+  onCancel: () => void
+  onConfirm: () => Promise<void> | void
+}> = ({ open, title, description, confirmLabel, busy = false, onCancel, onConfirm }) => (
+  <Modal
+    open={open}
+    onClose={() => {
+      if (!busy) onCancel()
+    }}
+    title={title}
+    size="sm"
+    closeLabel="关闭"
+    footer={
+      <>
+        <Button variant="secondary" size="sm" disabled={busy} onClick={onCancel}>
+          取消
+        </Button>
+        <Button
+          variant="danger"
+          size="sm"
+          loading={busy}
+          disabled={busy}
+          onClick={() => void onConfirm()}
+        >
+          {confirmLabel}
+        </Button>
+      </>
+    }
+  >
+    <div className="px-5 py-4">
+      <p className="m-0 whitespace-pre-wrap break-words type-body text-ink">{description}</p>
+    </div>
+  </Modal>
+)
 
 export const TaskCard: React.FC<{
   tasks: WebTaskItem[]
@@ -88,6 +129,8 @@ export const DeviceCard: React.FC<{
   onRemoveDevice: (deviceId: string) => Promise<void>
 }> = ({ devices, pairCode, onGeneratePairCode, onRemoveDevice }) => {
   const [generating, setGenerating] = useState(false)
+  const [pendingRemove, setPendingRemove] = useState<CloudDeviceRow | null>(null)
+  const [removing, setRemoving] = useState(false)
 
   return (
     <Card density="compact">
@@ -123,7 +166,7 @@ export const DeviceCard: React.FC<{
                   variant="ghost"
                   size="sm"
                   className="text-danger hover:bg-danger/10 hover:text-danger"
-                  onClick={() => void onRemoveDevice(device.id)}
+                  onClick={() => setPendingRemove(device)}
                 >
                   移除
                 </Button>
@@ -164,6 +207,28 @@ export const DeviceCard: React.FC<{
           <Caption className="text-ink-muted">生成一次性 6 位码，把一台设备接进来。</Caption>
         )}
       </div>
+      <ConfirmDangerModal
+        open={Boolean(pendingRemove)}
+        title="移除设备"
+        description={
+          pendingRemove
+            ? `确定要移除设备「${pendingRemove.name}」（${pendingRemove.id}）吗？移除后该设备将断开连接，需要重新配对才能接入。`
+            : ''
+        }
+        confirmLabel="确认移除"
+        busy={removing}
+        onCancel={() => setPendingRemove(null)}
+        onConfirm={async () => {
+          if (!pendingRemove || removing) return
+          setRemoving(true)
+          try {
+            await onRemoveDevice(pendingRemove.id)
+            setPendingRemove(null)
+          } finally {
+            setRemoving(false)
+          }
+        }}
+      />
     </Card>
   )
 }
@@ -171,9 +236,44 @@ export const DeviceCard: React.FC<{
 export const AuthCard: React.FC<{
   authorizations: CloudAuthorizationRow[]
   onRevoke: (id: string) => Promise<void>
-}> = ({ authorizations, onRevoke }) => (
-  <CloudAuthorizationCard authorizations={authorizations} onRevoke={onRevoke} />
-)
+}> = ({ authorizations, onRevoke }) => {
+  const [pendingRevoke, setPendingRevoke] = useState<CloudAuthorizationRow | null>(null)
+  const [revoking, setRevoking] = useState(false)
+
+  return (
+    <>
+      <CloudAuthorizationCard
+        authorizations={authorizations}
+        onRevoke={(id) => {
+          const found = authorizations.find((item) => item.id === id)
+          if (found) setPendingRevoke(found)
+        }}
+      />
+      <ConfirmDangerModal
+        open={Boolean(pendingRevoke)}
+        title="撤销授权"
+        description={
+          pendingRevoke
+            ? `确定要撤销这条授权（额度 ${pendingRevoke.used}/${pendingRevoke.quota}）吗？撤销后云端无法继续使用该授权派发新工单。`
+            : ''
+        }
+        confirmLabel="确认撤销"
+        busy={revoking}
+        onCancel={() => setPendingRevoke(null)}
+        onConfirm={async () => {
+          if (!pendingRevoke || revoking) return
+          setRevoking(true)
+          try {
+            await onRevoke(pendingRevoke.id)
+            setPendingRevoke(null)
+          } finally {
+            setRevoking(false)
+          }
+        }}
+      />
+    </>
+  )
+}
 
 export const NoticeCard: React.FC<{ notices: CloudNotice[] }> = ({ notices }) => (
   <CloudNoticeCard notices={notices} withSeconds />
@@ -439,6 +539,8 @@ export const MemoryTab: React.FC<{
   const [editKind, setEditKind] = useState<CloudMemoryKind>('fact')
   const [editContent, setEditContent] = useState('')
   const [editTags, setEditTags] = useState('')
+  const [pendingDelete, setPendingDelete] = useState<CloudMemoryItem | null>(null)
+  const [deletingMemory, setDeletingMemory] = useState(false)
 
   const [selectedDoc, setSelectedDoc] = useState<'AGENTS.md' | 'SOUL.md'>('AGENTS.md')
   const [docSaving, setDocSaving] = useState(false)
@@ -584,6 +686,7 @@ export const MemoryTab: React.FC<{
               </Select>
             </div>
             <Input
+              aria-label="新增长期记忆内容"
               placeholder="手工记录一条长期记忆（不会被自动抽取或梦境覆盖）…"
               value={content}
               onChange={(event) => setContent(event.target.value)}
@@ -650,11 +753,13 @@ export const MemoryTab: React.FC<{
                         </div>
                       </div>
                       <Textarea
+                        aria-label="编辑记忆内容"
                         rows={3}
                         value={editContent}
                         onChange={(event) => setEditContent(event.target.value)}
                       />
                       <Input
+                        aria-label="编辑记忆标签"
                         placeholder="标签（逗号分隔，可选）"
                         value={editTags}
                         onChange={(event) => setEditTags(event.target.value)}
@@ -724,15 +829,7 @@ export const MemoryTab: React.FC<{
                           variant="ghost"
                           size="sm"
                           className="text-danger hover:bg-danger/10 hover:text-danger"
-                          onClick={async () => {
-                            const res = await request(
-                              'DELETE',
-                              `/v1/memories/${encodeURIComponent(item.id)}`
-                            )
-                            if (res.ok) {
-                              onMemoriesChange(memories.filter((m) => m.id !== item.id))
-                            }
-                          }}
+                          onClick={() => setPendingDelete(item)}
                         >
                           删除
                         </Button>
@@ -787,6 +884,7 @@ export const MemoryTab: React.FC<{
               : '尚未创建（保存后立即对下一轮生效）'}
           </Caption>
           <Textarea
+            aria-label={`编辑 ${selectedDoc} 文档内容`}
             rows={10}
             value={currentDocValue}
             placeholder={
@@ -851,6 +949,42 @@ export const MemoryTab: React.FC<{
           )}
         </div>
       </Card>
+      <ConfirmDangerModal
+        open={Boolean(pendingDelete)}
+        title="删除长期记忆"
+        description={
+          pendingDelete
+            ? `确定要删除这条长期记忆吗？删除后无法恢复。\n「${pendingDelete.content.slice(0, 80)}${
+                pendingDelete.content.length > 80 ? '…' : ''
+              }」`
+            : ''
+        }
+        confirmLabel="确认删除"
+        busy={deletingMemory}
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={async () => {
+          if (!pendingDelete || deletingMemory) return
+          setDeletingMemory(true)
+          try {
+            const res = await request<{ error?: string }>(
+              'DELETE',
+              `/v1/memories/${encodeURIComponent(pendingDelete.id)}`
+            )
+            if (res.ok) {
+              onMemoriesChange(memories.filter((m) => m.id !== pendingDelete.id))
+              setPendingDelete(null)
+            } else {
+              setMemoryFeedback({
+                text: res.payload?.error || `删除失败 (HTTP ${res.status})`,
+                tone: 'error',
+              })
+              setPendingDelete(null)
+            }
+          } finally {
+            setDeletingMemory(false)
+          }
+        }}
+      />
     </div>
   )
 }

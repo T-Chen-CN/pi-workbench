@@ -1,8 +1,5 @@
 import '@fontsource/instrument-serif/latin-400.css'
 import '@fontsource/instrument-serif/latin-400-italic.css'
-import '@fontsource-variable/noto-serif-sc'
-import '@fontsource-variable/noto-sans'
-import '@fontsource-variable/noto-sans-sc'
 import '@fontsource-variable/geist-mono'
 import '../../../src/index.css'
 

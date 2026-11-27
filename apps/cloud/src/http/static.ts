@@ -8,6 +8,7 @@
 import { existsSync, promises as fs } from 'fs'
 import * as path from 'path'
 import { fileURLToPath } from 'url'
+import { brotliCompressSync, constants as zlibConstants, gzipSync } from 'node:zlib'
 import type { ServerResponse } from 'http'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -49,26 +50,111 @@ const SAFE_ASSET_FILE = /^[a-zA-Z0-9._-]+\.(?:js|css|woff2|woff|ttf|svg|png)$/
 const CSP_HEADER =
   "default-src 'self'; connect-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'"
 
-const cache = new Map<string, { body: Buffer; type: string; immutable?: boolean }>()
+const COMPRESSIBLE_EXTS = new Set(['.js', '.css', '.html', '.svg'])
+
+interface CachedStaticEntry {
+  body: Buffer
+  br?: Buffer
+  gzip?: Buffer
+  type: string
+  immutable?: boolean
+  compressible: boolean
+}
+
+const cache = new Map<string, CachedStaticEntry>()
+
+function buildCachedEntry(
+  body: Buffer,
+  type: string,
+  ext: string,
+  immutable?: boolean
+): CachedStaticEntry {
+  const compressible = COMPRESSIBLE_EXTS.has(ext)
+  if (!compressible) {
+    return { body, type, immutable, compressible: false }
+  }
+  // 首次读取时预压缩并缓存，后续请求按 Accept-Encoding 直接复用，避免重复占用主线程 CPU
+  const br = brotliCompressSync(body, {
+    params: {
+      [zlibConstants.BROTLI_PARAM_MODE]: zlibConstants.BROTLI_MODE_TEXT,
+      [zlibConstants.BROTLI_PARAM_QUALITY]: 6,
+      [zlibConstants.BROTLI_PARAM_SIZE_HINT]: body.length,
+    },
+  })
+  const gzip = gzipSync(body, { level: 6 })
+  return { body, br, gzip, type, immutable, compressible: true }
+}
+
+function negotiateEncoding(acceptEncoding?: string | string[]): 'br' | 'gzip' | null {
+  if (!acceptEncoding) return null
+  const header = Array.isArray(acceptEncoding) ? acceptEncoding.join(',') : acceptEncoding
+  if (!header.trim()) return null
+
+  let acceptsBr = false
+  let acceptsGzip = false
+  for (const part of header.split(',')) {
+    const segments = part.split(';').map((s) => s.trim().toLowerCase())
+    const token = segments[0]
+    if (token !== 'br' && token !== 'gzip') continue
+    let q = 1
+    for (let i = 1; i < segments.length; i += 1) {
+      if (segments[i].startsWith('q=')) {
+        const parsed = Number(segments[i].slice(2))
+        q = Number.isFinite(parsed) ? parsed : 0
+      }
+    }
+    if (q <= 0) continue
+    if (token === 'br') acceptsBr = true
+    else if (token === 'gzip') acceptsGzip = true
+  }
+
+  if (acceptsBr) return 'br'
+  if (acceptsGzip) return 'gzip'
+  return null
+}
 
 function writeResponse(
   res: ServerResponse,
-  cached: { body: Buffer; type: string; immutable?: boolean }
+  cached: CachedStaticEntry,
+  acceptEncoding?: string | string[]
 ): void {
-  res.writeHead(200, {
+  let payload = cached.body
+  let contentEncoding: 'br' | 'gzip' | undefined
+  if (cached.compressible) {
+    const encoding = negotiateEncoding(acceptEncoding)
+    if (encoding === 'br' && cached.br) {
+      payload = cached.br
+      contentEncoding = 'br'
+    } else if (encoding === 'gzip' && cached.gzip) {
+      payload = cached.gzip
+      contentEncoding = 'gzip'
+    }
+  }
+
+  const headers: Record<string, string> = {
     'content-type': cached.type,
+    'content-length': String(payload.length),
     'cache-control': cached.immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
     'x-frame-options': 'DENY',
     'x-content-type-options': 'nosniff',
     'content-security-policy': CSP_HEADER,
-  })
-  res.end(cached.body)
+  }
+  if (cached.compressible) {
+    headers['vary'] = 'Accept-Encoding'
+  }
+  if (contentEncoding) {
+    headers['content-encoding'] = contentEncoding
+  }
+
+  res.writeHead(200, headers)
+  res.end(payload)
 }
 
 export async function serveStatic(
   webDir: string,
   pathname: string,
-  res: ServerResponse
+  res: ServerResponse,
+  acceptEncoding?: string | string[]
 ): Promise<boolean> {
   if (pathname.startsWith('/assets/')) {
     const fileName = pathname.slice('/assets/'.length)
@@ -81,7 +167,7 @@ export async function serveStatic(
     if (!cached) {
       try {
         const body = await fs.readFile(path.join(webDir, 'assets', fileName))
-        cached = { body, type: mime, immutable: true }
+        cached = buildCachedEntry(body, mime, ext, true)
         cache.set(key, cached)
       } catch {
         res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
@@ -89,7 +175,7 @@ export async function serveStatic(
         return true
       }
     }
-    writeResponse(res, cached)
+    writeResponse(res, cached, acceptEncoding)
     return true
   }
 
@@ -100,7 +186,8 @@ export async function serveStatic(
   if (!cached) {
     try {
       const body = await fs.readFile(path.join(webDir, entry.file))
-      cached = { body, type: entry.type }
+      const ext = path.extname(entry.file).toLowerCase()
+      cached = buildCachedEntry(body, entry.type, ext, false)
       cache.set(key, cached)
     } catch {
       res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
@@ -108,6 +195,6 @@ export async function serveStatic(
       return true
     }
   }
-  writeResponse(res, cached)
+  writeResponse(res, cached, acceptEncoding)
   return true
 }

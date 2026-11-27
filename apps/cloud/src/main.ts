@@ -343,7 +343,12 @@ export async function createCloudServer(
           return
         }
         if ((req.method ?? 'GET') === 'GET') {
-          const served = await serveStatic(config.webDir || defaultWebDir(), url.pathname, res)
+          const served = await serveStatic(
+            config.webDir || defaultWebDir(),
+            url.pathname,
+            res,
+            req.headers['accept-encoding']
+          )
           if (served) return
         }
         const matched = router.match(req.method ?? 'GET', url.pathname)

@@ -52,6 +52,13 @@ import {
   UnitCard,
 } from './CloudWebCards'
 
+declare const __PI_CLOUD_WEB_VERSION__: string | undefined
+
+const FALLBACK_WEB_VERSION =
+  typeof __PI_CLOUD_WEB_VERSION__ === 'string' && __PI_CLOUD_WEB_VERSION__
+    ? __PI_CLOUD_WEB_VERSION__
+    : '0.11.2'
+
 const TABS: ReadonlyArray<{ id: WebTab; label: string }> = [
   { id: 'chat', label: '会话' },
   { id: 'tasks', label: '工单' },
@@ -149,42 +156,44 @@ const SetupView: React.FC<{
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center overflow-y-auto bg-surface p-6">
-      <div className="flex w-full max-w-sm flex-col gap-4 border border-line bg-raised p-6 shadow-print">
-        <div className="flex items-center gap-2.5">
-          <BrandSeal size={24} className="brand-seal" />
-          <h1 className="m-0 type-subtitle text-ink">Pi Cloud</h1>
+    <div className="cloud-web-root safe-top safe-bottom safe-x flex min-h-dvh items-center justify-center overflow-y-auto bg-surface">
+      <div className="w-full max-w-sm p-6">
+        <div className="flex w-full flex-col gap-4 border border-line bg-raised p-6 shadow-print">
+          <div className="flex items-center gap-2.5">
+            <BrandSeal size={24} className="brand-seal" />
+            <h1 className="m-0 type-subtitle text-ink">Pi Cloud</h1>
+          </div>
+          <Caption className="text-ink-muted">首次使用：创建唯一的管理员账号。</Caption>
+          <Field label="密码" htmlFor="setup-password">
+            <Input
+              id="setup-password"
+              type="password"
+              autoComplete="new-password"
+              placeholder="至少 8 位"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+            />
+          </Field>
+          <Field label="确认密码" htmlFor="setup-confirm">
+            <Input
+              id="setup-confirm"
+              type="password"
+              autoComplete="new-password"
+              placeholder="再输入一次"
+              value={confirm}
+              onChange={(event) => setConfirm(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.nativeEvent.isComposing && event.keyCode !== 229) {
+                  void submit()
+                }
+              }}
+            />
+          </Field>
+          {error && <Caption className="text-danger">{error}</Caption>}
+          <Button variant="primary" size="md" disabled={busy} onClick={() => void submit()}>
+            创建管理员账号
+          </Button>
         </div>
-        <Caption className="text-ink-muted">首次使用：创建唯一的管理员账号。</Caption>
-        <Field label="密码" htmlFor="setup-password">
-          <Input
-            id="setup-password"
-            type="password"
-            autoComplete="new-password"
-            placeholder="至少 8 位"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-          />
-        </Field>
-        <Field label="确认密码" htmlFor="setup-confirm">
-          <Input
-            id="setup-confirm"
-            type="password"
-            autoComplete="new-password"
-            placeholder="再输入一次"
-            value={confirm}
-            onChange={(event) => setConfirm(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.nativeEvent.isComposing && event.keyCode !== 229) {
-                void submit()
-              }
-            }}
-          />
-        </Field>
-        {error && <Caption className="text-danger">{error}</Caption>}
-        <Button variant="primary" size="md" disabled={busy} onClick={() => void submit()}>
-          创建管理员账号
-        </Button>
       </div>
     </div>
   )
@@ -223,32 +232,34 @@ const LoginView: React.FC<{
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center overflow-y-auto bg-surface p-6">
-      <div className="flex w-full max-w-sm flex-col gap-4 border border-line bg-raised p-6 shadow-print">
-        <div className="flex items-center gap-2.5">
-          <BrandSeal size={24} className="brand-seal" />
-          <h1 className="m-0 type-subtitle text-ink">Pi Cloud</h1>
+    <div className="cloud-web-root safe-top safe-bottom safe-x flex min-h-dvh items-center justify-center overflow-y-auto bg-surface">
+      <div className="w-full max-w-sm p-6">
+        <div className="flex w-full flex-col gap-4 border border-line bg-raised p-6 shadow-print">
+          <div className="flex items-center gap-2.5">
+            <BrandSeal size={24} className="brand-seal" />
+            <h1 className="m-0 type-subtitle text-ink">Pi Cloud</h1>
+          </div>
+          <Caption className="text-ink-muted">登录云端控制台。</Caption>
+          <Field label="密码" htmlFor="login-password">
+            <Input
+              id="login-password"
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.nativeEvent.isComposing && event.keyCode !== 229) {
+                  void submit()
+                }
+              }}
+              autoFocus
+            />
+          </Field>
+          {error && <Caption className="text-danger">{error}</Caption>}
+          <Button variant="primary" size="md" disabled={busy} onClick={() => void submit()}>
+            登录
+          </Button>
         </div>
-        <Caption className="text-ink-muted">登录云端控制台。</Caption>
-        <Field label="密码" htmlFor="login-password">
-          <Input
-            id="login-password"
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.nativeEvent.isComposing && event.keyCode !== 229) {
-                void submit()
-              }
-            }}
-            autoFocus
-          />
-        </Field>
-        {error && <Caption className="text-danger">{error}</Caption>}
-        <Button variant="primary" size="md" disabled={busy} onClick={() => void submit()}>
-          登录
-        </Button>
       </div>
     </div>
   )
@@ -514,9 +525,10 @@ export const CloudWebApp: React.FC = () => {
     })
   }, [clearReconnectTimer, showExpired])
 
-  // 同步文档主题属性（测试直接挂载组件时也保持 data-theme 与 html.dark 一致）
+  // 同步文档主题与云端 Web 标记（保证 Portal 弹窗也受移动端 16px 防缩放规则覆盖）
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
+    document.documentElement.setAttribute('data-cloud-web', 'true')
     document.documentElement.classList.toggle('dark', theme === 'dark')
   }, [theme])
 
@@ -625,7 +637,7 @@ export const CloudWebApp: React.FC = () => {
 
   if (view === 'loading') {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-surface">
+      <div className="cloud-web-root safe-top safe-bottom safe-x flex min-h-dvh items-center justify-center bg-surface">
         <div className="border border-rule-hairline bg-raised px-5 py-3 type-caption text-ink-muted">
           Loading…
         </div>
@@ -661,87 +673,93 @@ export const CloudWebApp: React.FC = () => {
 
   const wsLabel = wsStatus === 'open' ? '在线' : wsStatus === 'connecting' ? '连接中…' : '断开'
   const agentLabel = AGENT_STATUS_LABELS[session.agentStatus] || session.agentStatus
-  const versionText = `v${me?.version || '0.11.2'}`
+  const versionText = `v${me?.version || FALLBACK_WEB_VERSION}`
 
   return (
-    <div className="flex h-dvh flex-col overflow-hidden bg-surface text-ink">
-      {/* 顶栏 45px：品牌印面 + 标签切换 + 在线状态 + 主题切换 */}
-      <header className="top flex h-[45px] flex-shrink-0 items-center gap-3 border-b border-rule-divide bg-panel px-3">
-        <div className="flex flex-shrink-0 items-center gap-2">
-          <BrandSeal size={20} className="brand-seal" />
-          <span className="type-eyebrow text-ink">CLOUD</span>
-        </div>
-
-        <div
-          role="tablist"
-          aria-label="Pi Cloud 导航"
-          className="tab-strip-scroll flex h-full min-w-0 items-stretch overflow-x-auto"
-        >
-          {TABS.map((item) => (
-            <Tab
-              key={item.id}
-              active={tab === item.id}
-              label={
-                item.id === 'chat' && session.unreadCount > 0
-                  ? `${item.label} (${session.unreadCount})`
-                  : item.label
-              }
-              onSelect={() => {
-                setTab(item.id)
-                if (item.id === 'chat' && session.unreadCount > 0) markRead()
-              }}
-            />
-          ))}
-        </div>
-
-        <div className="ml-auto flex flex-shrink-0 items-center gap-3">
-          <div className="hidden items-center gap-3 md:flex">
-            <StatusText tone={onlineDevices > 0 ? 'success' : 'muted'} dot>
-              {onlineDevices}/{session.devices.length} 台设备在线
-            </StatusText>
-            {(session.agentStatus === 'thinking' || session.agentStatus === 'replying') && (
-              <Caption className="text-accent">{agentLabel}</Caption>
-            )}
-            {runningTasks.length > 0 && (
-              <div className="flex items-center gap-1.5">
-                <Caption className="text-ink-muted">
-                  {runningTasks.length === 1
-                    ? `${runningTasks[0].title || runningTasks[0].id}`
-                    : `${runningTasks.length} 个工单执行中`}
-                </Caption>
-                {runningTasks.length === 1 && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={Boolean(session.stoppingTaskIds[runningTasks[0].id])}
-                    onClick={() => stopTask(runningTasks[0].id)}
-                  >
-                    {session.stoppingTaskIds[runningTasks[0].id] ? '正在停止…' : '停止'}
-                  </Button>
-                )}
-              </div>
-            )}
+    <div className="cloud-web-root flex h-dvh flex-col overflow-hidden bg-surface text-ink">
+      {/* 顶栏 45px：品牌印面 + 标签切换 + 在线状态 + 主题切换；外层承接刘海屏安全区 */}
+      <header className="top safe-top safe-x flex-shrink-0 border-b border-rule-divide bg-panel">
+        <div className="flex h-[45px] items-center gap-3 px-3">
+          <div className="flex flex-shrink-0 items-center gap-2">
+            <BrandSeal size={20} className="brand-seal" />
+            <span className="type-eyebrow text-ink">CLOUD</span>
           </div>
-          <Button variant="ghost" size="sm" onClick={toggleTheme} aria-label="切换 Paper / Ink 主题">
-            {theme === 'dark' ? 'Ink' : 'Paper'}
-          </Button>
+
+          <div
+            role="tablist"
+            aria-label="Pi Cloud 导航"
+            className="tab-strip-scroll flex h-full min-w-0 items-stretch overflow-x-auto"
+          >
+            {TABS.map((item) => (
+              <Tab
+                key={item.id}
+                active={tab === item.id}
+                label={
+                  item.id === 'chat' && session.unreadCount > 0
+                    ? `${item.label} (${session.unreadCount})`
+                    : item.label
+                }
+                onSelect={() => {
+                  setTab(item.id)
+                  if (item.id === 'chat' && session.unreadCount > 0) markRead()
+                }}
+              />
+            ))}
+          </div>
+
+          <div className="ml-auto flex flex-shrink-0 items-center gap-3">
+            <div className="hidden items-center gap-3 md:flex">
+              <StatusText tone={onlineDevices > 0 ? 'success' : 'muted'} dot>
+                {onlineDevices}/{session.devices.length} 台设备在线
+              </StatusText>
+              {(session.agentStatus === 'thinking' || session.agentStatus === 'replying') && (
+                <Caption className="text-accent">{agentLabel}</Caption>
+              )}
+              {runningTasks.length > 0 && (
+                <div className="flex items-center gap-1.5">
+                  <Caption className="text-ink-muted">
+                    {runningTasks.length === 1
+                      ? `${runningTasks[0].title || runningTasks[0].id}`
+                      : `${runningTasks.length} 个工单执行中`}
+                  </Caption>
+                  {runningTasks.length === 1 && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={Boolean(session.stoppingTaskIds[runningTasks[0].id])}
+                      onClick={() => stopTask(runningTasks[0].id)}
+                    >
+                      {session.stoppingTaskIds[runningTasks[0].id] ? '正在停止…' : '停止'}
+                    </Button>
+                  )}
+                </div>
+              )}
+            </div>
+            <Button variant="ghost" size="sm" onClick={toggleTheme} aria-label="切换 Paper / Ink 主题">
+              {theme === 'dark' ? 'Ink' : 'Paper'}
+            </Button>
+          </div>
         </div>
       </header>
 
       {bannerError && (
         <div
           role="alert"
-          className="flex flex-shrink-0 items-center justify-between gap-2 border-b border-danger/30 bg-danger/10 px-4 py-1.5 type-caption text-danger"
+          className="safe-x flex-shrink-0 border-b border-danger/30 bg-danger/10 type-caption text-danger"
         >
-          <span className="min-w-0 truncate">{bannerError}</span>
-          <button
-            type="button"
-            aria-label="关闭提示"
-            onClick={() => setBannerError(null)}
-            className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-sm text-danger hover:bg-danger/10"
-          >
-            <X size={12} />
-          </button>
+          <div className="flex items-start justify-between gap-2 px-4 py-1.5">
+            <span className="min-w-0 flex-1 whitespace-pre-wrap break-words" title={bannerError}>
+              {bannerError}
+            </span>
+            <button
+              type="button"
+              aria-label="关闭提示"
+              onClick={() => setBannerError(null)}
+              className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-sm text-danger hover:bg-danger/10"
+            >
+              <X size={12} />
+            </button>
+          </div>
         </div>
       )}
 
@@ -780,61 +798,64 @@ export const CloudWebApp: React.FC = () => {
                 )}
               </StreamingTranscript>
 
-              <div className="composer flex flex-shrink-0 flex-col gap-2 border-t border-rule-divide bg-panel px-4 py-3">
-                <Textarea
-                  value={draft}
-                  rows={3}
-                  placeholder="说说你想让终端做什么…"
-                  onChange={(event) => setDraft(event.target.value)}
-                  onCompositionStart={() => {
-                    composingRef.current = true
-                  }}
-                  onCompositionEnd={() => {
-                    composingRef.current = false
-                  }}
-                  onKeyDown={(event) => {
-                    if (
-                      event.key === 'Enter' &&
-                      !event.shiftKey &&
-                      !composingRef.current &&
-                      !event.nativeEvent.isComposing &&
-                      event.keyCode !== 229
-                    ) {
-                      event.preventDefault()
-                      sendChat()
-                    }
-                  }}
-                />
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    disabled={!draft.trim()}
-                    onClick={sendChat}
-                  >
-                    发送
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    disabled={!session.canStopReply}
-                    onClick={() => sendFrame({ type: 'stop_reply' })}
-                  >
-                    停止回复
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => setConfirmPlanOpen(true)}
-                  >
-                    确认方案…
-                  </Button>
-                  <Caption className="hidden text-ink-muted sm:inline">
-                    Enter 发送 · Shift+Enter 换行
-                  </Caption>
-                  {(session.agentStatus === 'thinking' || session.agentStatus === 'replying') && (
-                    <Caption className="ml-auto text-accent">{agentLabel}</Caption>
-                  )}
+              <div className="composer safe-x flex-shrink-0 border-t border-rule-divide bg-panel">
+                <div className="flex flex-col gap-2 px-4 py-3">
+                  <Textarea
+                    aria-label="发送给云端 Agent 的消息"
+                    value={draft}
+                    rows={3}
+                    placeholder="说说你想让终端做什么…"
+                    onChange={(event) => setDraft(event.target.value)}
+                    onCompositionStart={() => {
+                      composingRef.current = true
+                    }}
+                    onCompositionEnd={() => {
+                      composingRef.current = false
+                    }}
+                    onKeyDown={(event) => {
+                      if (
+                        event.key === 'Enter' &&
+                        !event.shiftKey &&
+                        !composingRef.current &&
+                        !event.nativeEvent.isComposing &&
+                        event.keyCode !== 229
+                      ) {
+                        event.preventDefault()
+                        sendChat()
+                      }
+                    }}
+                  />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      disabled={!draft.trim()}
+                      onClick={sendChat}
+                    >
+                      发送
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={!session.canStopReply}
+                      onClick={() => sendFrame({ type: 'stop_reply' })}
+                    >
+                      停止回复
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setConfirmPlanOpen(true)}
+                    >
+                      确认方案…
+                    </Button>
+                    <Caption className="hidden text-ink-muted sm:inline">
+                      Enter 发送 · Shift+Enter 换行
+                    </Caption>
+                    {(session.agentStatus === 'thinking' || session.agentStatus === 'replying') && (
+                      <Caption className="ml-auto text-accent">{agentLabel}</Caption>
+                    )}
+                  </div>
                 </div>
               </div>
             </section>
@@ -1025,16 +1046,18 @@ export const CloudWebApp: React.FC = () => {
         )}
       </main>
 
-      {/* 底栏 28px：真实版本号 + WS/Agent 状态 + 在线设备数 */}
-      <footer className="bottom flex h-7 flex-shrink-0 items-center gap-3 border-t border-rule-divide bg-panel px-3 type-caption text-ink-muted">
-        <DataText className="text-ink-muted">{versionText}</DataText>
-        <StatusText tone={wsStatus === 'open' ? 'success' : wsStatus === 'connecting' ? 'warning' : 'danger'} dot>
-          {wsLabel}
-        </StatusText>
-        <span>{agentLabel}</span>
-        <DataText className="ml-auto text-ink-muted">
-          seq {session.lastSeq} · {onlineDevices}/{session.devices.length} 在线
-        </DataText>
+      {/* 底栏 28px：真实版本号 + WS/Agent 状态 + 在线设备数；外层承接 Home Indicator 安全区 */}
+      <footer className="bottom safe-bottom safe-x flex-shrink-0 border-t border-rule-divide bg-panel type-caption text-ink-muted">
+        <div className="flex h-7 items-center gap-3 px-3">
+          <DataText className="text-ink-muted">{versionText}</DataText>
+          <StatusText tone={wsStatus === 'open' ? 'success' : wsStatus === 'connecting' ? 'warning' : 'danger'} dot>
+            {wsLabel}
+          </StatusText>
+          <span>{agentLabel}</span>
+          <DataText className="ml-auto text-ink-muted">
+            seq {session.lastSeq} · {onlineDevices}/{session.devices.length} 在线
+          </DataText>
+        </div>
       </footer>
 
       <ConfirmPlanModal
