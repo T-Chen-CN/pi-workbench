@@ -254,7 +254,7 @@ PI_CLOUD_PORT=8787 npm run cloud:start
    ssh -i <本机SSH私钥路径> ubuntu@<cloud-host> 'sudo /opt/pi-cloud/update.sh'
    ```
    - 常用参数：`--dry-run`（仅检查）、`--force`（强制重装同 SHA 版本）。若改过 `apps/cloud/deploy/update.sh` 本身，上线后顺手执行 `sudo install -m 755 /opt/pi-cloud/current/deploy/update.sh /opt/pi-cloud/update.sh` 同步脚本。
-   - **本机 SSH 私钥注意**：公钥已配在服务器 `ubuntu` 账号；若当前会话未告知本机私钥路径，先向用户索取（严禁写入仓库）。在 Windows 下若私钥文件继承了目录宽权限被 OpenSSH 拒载，不要修改原盘文件权限，可在 `%TEMP%` 建临时副本用 `icacls <tmp> /inheritance:r /grant:r "$env:USERNAME:(R)"` 收紧后执行并在 `finally` 中立即删除。
+   - **本机部署配置与 SSH 私钥注意**：公钥已配在服务器 `ubuntu` 账号；本机可在已被 `.gitignore` / ESLint / 打包清单忽略的 `.tmp/cloud-deploy.local.json` 保存连接元信息（`{ "host", "user", "keyPath", "domain?" }`，**仅存私钥路径、严禁放私钥明文，严禁提交到仓库**）。执行前优先读取该本机文件；若不存在再向用户索取。在 Windows 下若私钥文件继承了目录宽权限被 OpenSSH 拒载，不要修改原盘文件权限，可在 `%TEMP%` 建临时副本用 `icacls <tmp> /inheritance:r /grant:r "$env:USERNAME:(F)"` 收紧为仅当前用户权限后执行，并在 `finally` 中立即删除。
 3. **上线后验收**：
    - 检查 `https://<cloud-host>/v1/health` 返回 `{"ok":true,"ready":true,"hasAccount":true}`；
    - 检查 `https://<cloud-host>/` 返回 `200` 及新 `/assets/index-*.js`。
