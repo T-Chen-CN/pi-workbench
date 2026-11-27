@@ -155,8 +155,22 @@ export async function writeJsonAtomicAsync(
   }
 }
 
+/** 异步串行原子写 JSON（默认带 .bak 与 fsync，不阻塞主进程 UI 线程） */
+export async function writeJsonAtomic(
+  filePath: string,
+  value: unknown,
+  options?: JsonWriteOptions
+): Promise<void> {
+  await writeJsonAtomicAsync(filePath, value, options)
+}
+
 /** 同步原子写 JSON（仅限启动期或必须同步落盘的极小状态文件） */
-export function writeJsonAtomicSync(filePath: string, value: unknown): void {
+export function writeJsonAtomicSync(
+  filePath: string,
+  value: unknown,
+  options: JsonWriteOptions = {}
+): void {
+  const { backup = true, fsync = true } = options
   const dir = path.dirname(filePath)
   fs.mkdirSync(dir, { recursive: true })
 
@@ -167,7 +181,7 @@ export function writeJsonAtomicSync(filePath: string, value: unknown): void {
   try {
     fd = fs.openSync(tmpPath, 'w', 0o600)
     fs.writeFileSync(fd, content, 'utf-8')
-    fs.fsyncSync(fd)
+    if (fsync) fs.fsyncSync(fd)
   } catch (error) {
     if (fd !== null) {
       try {
@@ -187,14 +201,16 @@ export function writeJsonAtomicSync(filePath: string, value: unknown): void {
     if (fd !== null) fs.closeSync(fd)
   }
 
-  try {
-    if (fs.existsSync(filePath)) {
-      // 只有主文件仍是合法 JSON 时才覆盖备份，避免把损坏内容写进 .bak
-      JSON.parse(fs.readFileSync(filePath, 'utf-8'))
-      fs.copyFileSync(filePath, `${filePath}.bak`)
+  if (backup) {
+    try {
+      if (fs.existsSync(filePath)) {
+        // 只有主文件仍是合法 JSON 时才覆盖备份，避免把损坏内容写进 .bak
+        JSON.parse(fs.readFileSync(filePath, 'utf-8'))
+        fs.copyFileSync(filePath, `${filePath}.bak`)
+      }
+    } catch (error) {
+      console.warn(`[AtomicJson] Skipped backing up unreadable ${filePath}:`, error)
     }
-  } catch (error) {
-    console.warn(`[AtomicJson] Skipped backing up unreadable ${filePath}:`, error)
   }
 
   try {

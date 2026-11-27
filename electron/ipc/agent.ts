@@ -1,7 +1,8 @@
 /** Agent 生命周期、对话、流式控制与审批 IPC（会话与工具结果子域分别在 agent-sessions.ts / agent-tools.ts） */
 
 import * as path from 'path'
-import { getAppDir, getBridgeEntryUrl } from '../app-paths.js'
+import { getAppDir } from '../app-paths.js'
+import type { RegisteredAgent } from '../agent-registry.js'
 import { isTrustedWorkspacePath } from '../workspace-trust.js'
 import { providerConfigKey } from '../agent-config-key.js'
 import { activeProviderConfig, isCatalogNetworkAllowed } from '../providers-service.js'
@@ -84,8 +85,8 @@ async function initializeWorkspaceAgent(
       return { success: true }
     }
 
-    // 延迟加载 AgentManager（用运行时路径解析，避免类型检查依赖未构建的 pi-bridge/dist）
-    const { AgentManager } = await import(getBridgeEntryUrl())
+    // 延迟加载 AgentManager（保持主进程冷启动轻量化，同时走 workspace 包名享受完整静态类型检查）
+    const { AgentManager } = await import('pi-bridge')
     const agent = new AgentManager()
     const coordinator = await getCoordinator(workspaceDir)
 
@@ -110,7 +111,7 @@ async function initializeWorkspaceAgent(
       // read 工具遇到 pdf / docx / xlsx / pptx 等时回来要内容（工作线程在渲染层）
       readDocument: (request: { path: string; pages?: string; sheet?: string; slide?: string }) =>
         readDocumentForAgent(request),
-      requestApproval: (request: unknown) => context.approvalBroker.request(request as any),
+      requestApproval: (request) => context.approvalBroker.request(request),
       resolveSessionRoot: (sessionId: string) => coordinator?.getSessionRoot(sessionId),
       isSessionOfWorkspace: (sessionId: string, headerCwd: string) => {
         if (coordinator?.hasBinding(sessionId)) return true
@@ -148,7 +149,11 @@ async function initializeWorkspaceAgent(
 
     if (result.success) {
       // 登记实例；若该工作区已有旧实例会先释放
-      await context.agentRegistry.set(workspaceDir, agent, configKey)
+      await context.agentRegistry.set(
+        workspaceDir,
+        agent as unknown as RegisteredAgent,
+        configKey
+      )
       console.log('[Main] Pi Agent initialized successfully')
     } else {
       await agent.dispose().catch(() => undefined)

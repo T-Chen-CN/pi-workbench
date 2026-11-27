@@ -2,7 +2,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import * as fs from 'fs/promises'
 import * as path from 'path'
 import * as os from 'os'
-import { readJsonWithBackup, writeJsonAtomicSync } from '../../electron/atomic-json'
+import {
+  readJsonAsyncWithBackup,
+  readJsonWithBackup,
+  writeJsonAtomic,
+  writeJsonAtomicAsync,
+  writeJsonAtomicSync,
+} from '../../electron/atomic-json'
 
 let dir: string
 
@@ -75,5 +81,26 @@ describe('atomic JSON persistence', () => {
 
     const entries = await fs.readdir(dir)
     expect(entries).toEqual(['settings.json'])
+  })
+
+  it('supports async atomic writes, backup recovery, and backup: false option', async () => {
+    const file = path.join(dir, 'async-settings.json')
+    await writeJsonAtomic(file, { step: 1 })
+    await writeJsonAtomic(file, { step: 2 })
+    await fs.writeFile(file, '{ broken', 'utf-8')
+
+    expect(await readJsonAsyncWithBackup(file)).toMatchObject({
+      source: 'backup',
+      data: { step: 1 },
+    })
+
+    const draftFile = path.join(dir, 'draft.json')
+    await writeJsonAtomicAsync(draftFile, { text: 'v1' }, { backup: false, fsync: false })
+    await writeJsonAtomicAsync(draftFile, { text: 'v2' }, { backup: false, fsync: false })
+    expect(await fs.readdir(dir)).not.toContain('draft.json.bak')
+    expect(await readJsonAsyncWithBackup(draftFile)).toMatchObject({
+      source: 'primary',
+      data: { text: 'v2' },
+    })
   })
 })

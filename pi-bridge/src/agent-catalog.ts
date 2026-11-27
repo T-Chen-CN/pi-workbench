@@ -3,7 +3,7 @@
  * 负责同步远端目录快照、解析当前活跃模型、输出能力视图与刷新远端模型目录。
  */
 
-import type { ModelRuntime } from '@earendil-works/pi-coding-agent'
+import type { ModelRuntime, SessionManager } from '@earendil-works/pi-coding-agent'
 import type { Api, Model } from '@earendil-works/pi-ai'
 import {
   PRESET_PROVIDER_IDS,
@@ -102,6 +102,48 @@ export class AgentCatalogService {
         this.deps.getModelRuntime()?.getModel(sessionModel.provider, sessionModel.id) ??
         sessionModel
       )
+    }
+    return this.resolveActiveModel()
+  }
+
+  /**
+   * 为即将创建的会话运行时解析初始模型：
+   * 若老会话分支里记录了当前供应商下仍可用的模型，优先保留它，
+   * 避免配置刷新重建 Agent 后把老会话强行重置回全局默认模型。
+   */
+  resolveSessionInitialModel(sessionManager: SessionManager): Model<Api> | undefined {
+    const providerId = this.deps.getConfig()?.apiConfig.providerId
+    const modelRuntime = this.deps.getModelRuntime()
+    if (providerId && modelRuntime) {
+      try {
+        const branch = sessionManager.getBranch() as Array<Record<string, any>>
+        for (let index = branch.length - 1; index >= 0; index -= 1) {
+          const entry = branch[index]
+          let recordedProvider: string | undefined
+          let recordedModelId: string | undefined
+          if (entry?.type === 'model_change') {
+            recordedProvider = typeof entry.provider === 'string' ? entry.provider : undefined
+            recordedModelId = typeof entry.modelId === 'string' ? entry.modelId : undefined
+          } else if (entry?.type === 'message' && entry.message?.role === 'assistant') {
+            recordedProvider =
+              typeof entry.message.provider === 'string' ? entry.message.provider : undefined
+            recordedModelId =
+              typeof entry.message.model === 'string' ? entry.message.model : undefined
+          }
+          if (!recordedProvider || !recordedModelId) continue
+          if (recordedProvider !== providerId) break
+          const found = modelRuntime.getModel(providerId, recordedModelId)
+          if (found) {
+            const allowed = this.catalogModels()
+            if (allowed.length === 0 || allowed.some((item) => item.id === found.id)) {
+              return found
+            }
+          }
+          break
+        }
+      } catch {
+        // 读取分支失败时回退工作区默认模型
+      }
     }
     return this.resolveActiveModel()
   }

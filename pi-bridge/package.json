@@ -16,7 +16,30 @@
       "import": "./dist/atomic-json.js",
       "default": "./dist/atomic-json.js"
     },
+    "./protocol": {
+      "types": "./dist/protocol.d.ts",
+      "import": "./dist/protocol.js",
+      "default": "./dist/protocol.js"
+    },
+    "./presets": {
+      "types": "./dist/presets.d.ts",
+      "import": "./dist/presets.js",
+      "default": "./dist/presets.js"
+    },
+    "./images": {
+      "types": "./dist/images.d.ts",
+      "import": "./dist/images.js",
+      "default": "./dist/images.js"
+    },
     "./dist/*": "./dist/*"
+  },
+  "typesVersions": {
+    "*": {
+      "atomic-json": ["./dist/atomic-json.d.ts"],
+      "protocol": ["./dist/protocol.d.ts"],
+      "presets": ["./dist/presets.d.ts"],
+      "images": ["./dist/images.d.ts"]
+    }
   },
   "scripts": {
     "build": "tsc",

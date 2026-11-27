@@ -5,7 +5,21 @@
  * Uses @earendil-works/pi-coding-agent for AI-powered development assistance.
  */
 
-export { AgentManager } from './agent-manager.js'
+export { AgentManager, AgentRuntimeHost } from './agent-manager.js'
+export {
+  SessionController,
+  buildSessionExtensionFactories,
+  createSessionController,
+  type PendingRootSwitch,
+  type SessionControllerDeps,
+  type SessionTurnState,
+} from './session-controller.js'
+export {
+  SessionRepository,
+  readSessionHeaderInfo,
+  type OpenTabsState,
+  type SessionRepositoryDeps,
+} from './session-repository.js'
 export { isPiOffline, normalizePiOfflineEnv } from './agent-catalog.js'
 export {
   deriveMessage,
@@ -130,10 +144,21 @@ export type {
 export {
   readJsonAsyncWithBackup,
   readJsonWithBackup,
+  writeJsonAtomic,
   writeJsonAtomicAsync,
   writeJsonAtomicSync,
 } from './atomic-json.js'
 export type { JsonReadResult, JsonWriteOptions } from './atomic-json.js'
+
+/** 聊天图片附件校验常量与函数 */
+export {
+  CHAT_IMAGE_MIME,
+  MAX_CHAT_IMAGES,
+  MAX_IMAGE_BASE64_CHARS,
+  MAX_TOTAL_IMAGE_BASE64_CHARS,
+  validateChatImages,
+  type ChatImageInput,
+} from './images.js'
 
 /** 文件型目录缓存（SDK 格式）+ 只读快照 */
 export { createFileModelsStore } from './models-store.js'
