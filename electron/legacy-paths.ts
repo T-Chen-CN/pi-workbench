@@ -113,8 +113,9 @@ export function migrateLegacyInstallDirSync(
 
   const subtrees = ['config', 'data', 'logs', path.join('cache', 'drafts')]
   const sources: string[] = []
-  if (hasStagedData) sources.push(stagedDir)
+  // 若安装目录内仍保留旧数据，其内容必然比安装器提前暂存的副本更新或一致，必须优先于暂存目录合并
   if (hasLegacyInstallData) sources.push(installDir)
+  if (hasStagedData) sources.push(stagedDir)
 
   for (const sourceBase of sources) {
     for (const subtree of subtrees) {

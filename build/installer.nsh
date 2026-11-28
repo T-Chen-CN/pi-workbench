@@ -66,21 +66,25 @@ LangString PW_KEEP_DATA_CHECKBOX 2052 "保留用户配置与会话数据（%APPD
   UninstPage custom un.pwKeepDataPageShow un.pwKeepDataPageLeave
 !macroend
 
-!macro customUnInstall
-  # 仅真正卸载时清理外部残留；升级（--updated）绝不触碰用户数据
-  ${ifNot} ${isUpdated}
-    RMDir /r "${PI_LEGACY_UPDATE_CACHE}"
-    Delete "${PI_LEGACY_UPDATE_FLAG}"
-    RMDir /r "${PI_LEGACY_UPDATER_STORE}"
-    ${if} $KeepUserData != 1
-      RMDir /r "${PI_USER_DATA}"
-    ${endIf}
-  ${endIf}
+!macro PW_ENTER_USER_CONTEXT
+  # 旧版若曾以 /allusers（HKLM）模式安装，initMultiUser 会把上下文设为 all，
+  # 导致 $APPDATA 解析到 C:\ProgramData 而非当前用户的 %APPDATA%。
+  # 读写用户数据目录与更新缓存前必须切到 current，完成后按 $installMode 恢复。
+  SetShellVarContext current
 !macroend
 
-!macro customInit
-  # 必须在旧卸载器清理 $INSTDIR 之前，先抢救仍留在安装目录内的旧版（<=0.11.2 或未完成迁移的 0.12.0）数据到暂存目录，
-  # 由新版本首次启动的 migrateLegacyInstallDirSync 合并进 %APPDATA%\pi-workbench 后清理。
+!macro PW_RESTORE_SHELL_CONTEXT
+  ${If} $installMode == "all"
+    SetShellVarContext all
+  ${Else}
+    SetShellVarContext current
+  ${EndIf}
+!macroend
+
+!macro PW_RESCUE_LEGACY_DATA
+  # 在任何可能清理 $INSTDIR 的步骤之前，先把仍留在安装目录内的旧版用户数据暂存到当前用户的
+  # %APPDATA%\pi-workbench\.pending-legacy-migration，供新版本首启无损合并。
+  !insertmacro PW_ENTER_USER_CONTEXT
   ${If} "$INSTDIR" != ""
   ${AndIfNot} ${FileExists} "$INSTDIR\portable"
   ${AndIfNot} ${FileExists} "${PI_MIGRATION_MARKER}"
@@ -105,10 +109,43 @@ LangString PW_KEEP_DATA_CHECKBOX 2052 "保留用户配置与会话数据（%APPD
       ${EndIf}
     ${EndIf}
   ${EndIf}
+  !insertmacro PW_RESTORE_SHELL_CONTEXT
+!macroend
+
+!macro customUnInstall
+  ${if} ${isUpdated}
+    # 纵深防御：即使升级时由本卸载器执行 RMDir /r $INSTDIR，也绝不丢失尚未迁移的旧数据
+    !insertmacro PW_RESCUE_LEGACY_DATA
+  ${else}
+    # 仅真正卸载时清理当前用户的外部残留与（取消勾选保留时）用户数据
+    !insertmacro PW_ENTER_USER_CONTEXT
+    RMDir /r "${PI_LEGACY_UPDATE_CACHE}"
+    Delete "${PI_LEGACY_UPDATE_FLAG}"
+    RMDir /r "${PI_LEGACY_UPDATER_STORE}"
+    ${if} $KeepUserData != 1
+      RMDir /r "${PI_USER_DATA}"
+    ${endIf}
+    !insertmacro PW_RESTORE_SHELL_CONTEXT
+    # 若曾是 /allusers 安装，顺带清理此前错落在 ProgramData 的更新缓存残留（仅删空目录）
+    ${If} $installMode == "all"
+      SetShellVarContext all
+      RMDir /r "$APPDATA\pi-workbench\cache\pi-workbench-updater"
+      Delete "$APPDATA\pi-workbench\cache\pi-workbench-updater.flag"
+      RMDir "$APPDATA\pi-workbench\cache"
+      RMDir "$APPDATA\pi-workbench"
+      !insertmacro PW_RESTORE_SHELL_CONTEXT
+    ${EndIf}
+  ${endIf}
+!macroend
+
+!macro customInit
+  # 必须在旧卸载器清理 $INSTDIR 之前，先抢救仍留在安装目录内的旧版数据到当前用户暂存目录
+  !insertmacro PW_RESCUE_LEGACY_DATA
 !macroend
 
 !macro customInstall
-  # 差分更新基准收口到统一数据目录，并在安装完成后写标记供新版本首启清理 pending/
+  # 差分更新基准收口到当前用户的统一数据目录（%APPDATA%\pi-workbench），避免 /allusers 误落 ProgramData
+  !insertmacro PW_ENTER_USER_CONTEXT
   CreateDirectory "${PI_DIFFERENTIAL_BASE}"
   CopyFiles /SILENT "$EXEPATH" "${PI_DIFFERENTIAL_BASE}\installer.exe"
   FileOpen $9 "${PI_UPDATE_FLAG}" w
@@ -119,6 +156,17 @@ LangString PW_KEEP_DATA_CHECKBOX 2052 "保留用户配置与会话数据（%APPD
   RMDir /r "${PI_LEGACY_UPDATER_STORE}"
   RMDir /r "${PI_LEGACY_UPDATE_CACHE}"
   Delete "${PI_LEGACY_UPDATE_FLAG}"
+  !insertmacro PW_RESTORE_SHELL_CONTEXT
+
+  # 若历史上以 /allusers 安装并曾由 0.12.0/0.12.1 在 ProgramData 落下缓存，顺手回收（非递归 RMDir 绝不误删非空目录）
+  ${If} $installMode == "all"
+    SetShellVarContext all
+    RMDir /r "$APPDATA\pi-workbench\cache\pi-workbench-updater"
+    Delete "$APPDATA\pi-workbench\cache\pi-workbench-updater.flag"
+    RMDir "$APPDATA\pi-workbench\cache"
+    RMDir "$APPDATA\pi-workbench"
+    !insertmacro PW_RESTORE_SHELL_CONTEXT
+  ${EndIf}
 
   # 更新后刷新 Windows Shell / 图标缓存（Win10/11 用 -ClearIconCache；缺文件时静默跳过）
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0x0000, i 0, i 0)'

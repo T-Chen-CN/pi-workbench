@@ -130,6 +130,40 @@ describe('migrateLegacyInstallDirSync（旧便携安装目录 → 标准数据�
     expect(fs.existsSync(path.join(dataDir, 'config', '.migrated-from-install-dir'))).toBe(true)
     expect(fs.existsSync(stagedDir)).toBe(false)
   })
+
+  it('prefers fresher installDir files over .pending-legacy-migration when both exist and removes staged dir', () => {
+    const installDir = makeTempDir()
+    const dataDir = makeTempDir()
+    const stagedDir = path.join(dataDir, '.pending-legacy-migration')
+    fs.mkdirSync(path.join(installDir, 'config'), { recursive: true })
+    fs.mkdirSync(path.join(stagedDir, 'config'), { recursive: true })
+    fs.writeFileSync(path.join(installDir, 'config', 'settings.json'), '{"fresh":true}')
+    fs.writeFileSync(path.join(stagedDir, 'config', 'settings.json'), '{"fresh":false}')
+    fs.writeFileSync(path.join(stagedDir, 'config', 'only-staged.json'), '{"from":"staged"}')
+
+    const result = migrateLegacyInstallDirSync({
+      installDir,
+      dataDir,
+      logger: silentLogger,
+    })
+
+    expect(result.needed).toBe(true)
+    expect(fs.readFileSync(path.join(dataDir, 'config', 'settings.json'), 'utf8')).toBe('{"fresh":true}')
+    expect(fs.readFileSync(path.join(dataDir, 'config', 'only-staged.json'), 'utf8')).toBe(
+      '{"from":"staged"}'
+    )
+    expect(fs.existsSync(stagedDir)).toBe(false)
+  })
+
+  it('guards NSIS build/installer.nsh against /allusers ProgramData context and preserves legacy data before uninstall', () => {
+    const nshPath = path.resolve(__dirname, '../../build/installer.nsh')
+    const nsh = fs.readFileSync(nshPath, 'utf8')
+    expect(nsh).toContain('SetShellVarContext current')
+    expect(nsh).toContain('!macro PW_RESCUE_LEGACY_DATA')
+    expect(nsh).toContain('!insertmacro PW_RESCUE_LEGACY_DATA')
+    expect(nsh).toMatch(/!macro customInit[\s\S]*?!insertmacro PW_RESCUE_LEGACY_DATA/)
+    expect(nsh).toMatch(/!macro customUnInstall[\s\S]*?!insertmacro PW_RESCUE_LEGACY_DATA/)
+  })
 })
 
 describe('migratePiAgentHome', () => {
