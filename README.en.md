@@ -74,25 +74,25 @@ The agent does not just say "done". Every file it touched in that turn shows up 
 This is not an IDE plugin but a standalone workbench: closing the window only parks it in the tray, while sessions, file watchers and update checks keep running.
 
 - **Workspaces stay resident**: switching tabs only toggles visibility — editors, diffs, terminal and agent sessions are all kept, not torn down.
-- **Panels detach**: pull the file tree, Git view, chat or terminal into its own window; they share one store, and the terminal keeps its PTY and scrollback.
+- **Panels detach**: pull the file tree, Git view, chat or terminal into a native window; detached windows stay visible when the main window hides to the tray, sync live across windows, and dock back on restart while keeping your panel widths.
 - **Context has a meter**: token usage and cost sit above the composer, with an optional budget cap; only 80% / 95% change colour.
 
 ### Local-first: your data stays on your machine
 
 | Location                     | Contents                                                                               |
 | ---------------------------- | -------------------------------------------------------------------------------------- |
-| `{appDir}/config/`           | `settings.json`, `providers.json`, `credentials.json` (keys encrypted), `web-search.json` |
+| `{appDir}/config/`           | `settings.json`, `providers.json`, `credentials.json` (keys encrypted), `web-search.json`, `mcp.json`, `mcp-trust.json` |
 | `{appDir}/data/`             | `models.json`, session records, `workspaces.db`                                        |
 | `{appDir}/cache/`            | temp files, downloaded update packages                                                 |
 | `{appDir}/logs/`             | `main.log`, `agent.log` (rotated at 5MB)                                               |
-| `{workspace}/.pi-workbench/` | editor tabs, chat tabs, session extras, worktree binding, terminal logs, plugin config |
+| `{workspace}/.pi-workbench/` | editor tabs, chat tabs, session extras, worktree binding, terminal logs, plugin & project MCP config |
 
-- API keys are encrypted with Electron `safeStorage` as `enc:<base64>`; plaintext never reaches disk, logs or the workspace.
-- The renderer is sandboxed with no Node access; every IPC channel validates its sender; file operations are confined to trusted workspaces plus `{appDir}/cache/`.
-- No telemetry, no account, fully offline-capable; web search is optional.
+- API keys, web-search keys and MCP secrets are encrypted with Electron `safeStorage` as `enc:<base64>`; plaintext never reaches disk, logs or the workspace. Project-level MCP configs require explicit user approval pinned by SHA-256 fingerprint before connecting.
+- The renderer is sandboxed with no Node access; the Pi Agent and workspace plugins run in an isolated `utilityProcess`; every IPC channel validates its sender; file operations are confined to trusted workspaces plus `{appDir}/cache/`.
+- No telemetry, no account, fully offline-capable; web search and MCP servers are optional.
 - Standard builds use a strict two-directory layout separating the install folder from a single data directory (`%APPDATA%\pi-workbench` on Windows, `~/Library/Application Support/pi-workbench` on macOS, `~/.config/pi-workbench` on Linux); the Windows Portable `.zip` keeps data inside the extracted folder.
 
-> **Everything else** (useful, but not the selling point): multi-tab Monaco editing with 2s debounced auto-save, file tree operations with live refresh, an xterm.js + node-pty terminal, command palette and workspace plugins, Paper / Ink themes, Chinese / English UI, crash-recovered drafts, auto-update.
+> **Everything else** (useful, but not the selling point): multi-tab Monaco editing with native side-by-side Diff, 2s debounced auto-save, file tree operations with live refresh, an xterm.js + node-pty terminal, global and project MCP servers (`stdio` / Streamable HTTP / SSE), command palette and workspace plugins, Paper / Ink themes, Chinese / English UI, crash-recovered drafts, auto-update.
 
 ---
 
@@ -148,9 +148,10 @@ Artifacts land in `release/`. Building, signing, auto-update and troubleshooting
 
 ```bash
 npm run type-check
-npm test           # 1,800+ Vitest cases
+npm test           # 2,090+ Vitest cases
 npm run lint
 npm run build
+npm run test:e2e:smoke
 ```
 
 ---
@@ -164,6 +165,7 @@ Open **Settings → Providers** on first run and complete three steps:
 3. **Choose a model** — any model in the catalog is selectable; context window and max output tokens can be **lowered** per model and take effect on the next turn.
 
 **Web search** (optional): pick one of ten providers; the key is encrypted into `config/web-search.json`.
+**MCP servers** (optional): configure global `stdio` / Streamable HTTP / SSE servers in **Settings → MCP Servers** (secrets encrypted in `config/mcp.json`), or explicitly approve workspace `.pi-workbench/mcp.json` / `.mcp.json` files (SHA-256 fingerprint pinned); when paired with a self-hosted cloud service, cloud MCP servers can also be managed from both the desktop app and web console.
 
 ---
 
@@ -171,12 +173,12 @@ Open **Settings → Providers** on first run and complete three steps:
 
 | Item            | State                                                                                                                                                         |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Current version | `0.11.2` (2026-11-27; Phase 0–2 hardening & refactor + two-folder/portable builds ready on `main`)                                                            |
+| Current version | `0.12.0` (2026-11-28)                                                                                                                                         |
 | Releases        | Installers, Windows Portable `.zip` and `latest*.yml` produced by CI on version tags                                                                          |
-| Phases          | Local Agent workbench & Pi-kernel Cloud Agent live; security hardening, SQLite, shared cloud UI, workers, Zod validation, and domain restructuring complete   |
-| Quality         | 7-tsconfig type-check + lint (`jsx-a11y` / AST color / boundary rules) + 1,800+ Vitest cases + full `build` / `build:cloud`; CI runs Windows packaging smoke  |
-| Stack           | Electron 44 · React 19 · TypeScript 5.9 · Monaco 0.57 · Zod 4 · `@earendil-works/pi-coding-agent` 1.3                                                         |
-| Known limits    | Not signed or notarized; legacy Office formats are not parsed; no OCR for scans; Linux tray degrades to minimize; manual platform acceptance is still pending |
+| Phases          | Local Agent workbench & Pi-kernel Cloud Agent live; `utilityProcess` isolation, native multi-window detach, unified MCP, and strict two-folder layout shipped |
+| Quality         | 9-tsconfig type-check + `eslint --max-warnings 0` + 2,090+ Vitest cases + full `build` / `build:cloud` + Playwright Electron smoke E2E                        |
+| Stack           | Electron 44 · React 19 · TypeScript 5.9 · Zustand 5 · Monaco 0.57 · Zod 4 · i18next · `@earendil-works/pi-coding-agent` 1.3                                   |
+| Known limits    | Not signed or notarized; legacy Office formats are not parsed; no OCR for scans; Linux tray degrades to minimize; manual macOS / Linux & live-credential checks pending |
 
 **Next up**: live-credential manual acceptance for the 8 provider presets, manual macOS / Linux acceptance, cloud OAuth login, and evaluating managed worktree placement. Current state is in [STATUS](docs/progress/STATUS.md); tasks and parked items in [BACKLOG](docs/progress/BACKLOG.md).
 
@@ -185,29 +187,33 @@ Open **Settings → Providers** on first run and complete three steps:
 ## How it works
 
 ```
-Renderer (sandboxed, no Node)
-  React + Zustand + Monaco
-  window.electronAPI  ←  contextBridge  ←  preload
-        │  IPC: every channel goes through handleIpc (sender-validated, fail-closed)
+Renderer (sandboxed, no Node; native multi-window support)
+  React + Zustand 5 + Monaco
+  window.electronAPI  ←  contextBridge  ←  preload.cjs
+        │  IPC: every channel goes through handleIpc (sender + Zod validation, fail-closed)
 Main process (Electron 44 / Node 24)
-  fs · dialogs · safeStorage · watchers · PTY · PDF / OOXML extraction
-  AgentManager (pi-coding-agent) ──HTTP──> model provider
-  read / write / edit / bash operate on the workspace directly
+  fs · dialogs · safeStorage · chokidar · PTY · updater · cloud runner
+        ├── worker_threads: PDF / OOXML parsing, repo-map scanning
+        └── utilityProcess (direct MessagePort streaming, crash recovery)
+              AgentManager (pi-coding-agent) + MCP Client + workspace plugins
+              read / write / edit / bash and MCP tools run inside session permission boundaries
 ```
 
-The Pi Agent runs inside the main process (never behind a local HTTP service) so permission enforcement, approval timeouts and worktree binding remain deterministic; CPU-heavy non-agent parsing (PDF / Office extraction, repo-map scanning) is offloaded to `worker_threads` to keep the UI responsive.
+The Pi Agent and workspace plugins run isolated in an Electron `utilityProcess` streaming over a direct `MessagePort` (never behind a local HTTP service), keeping permission enforcement, approval timeouts and worktree binding deterministic; CPU-heavy non-agent parsing (PDF / Office extraction, repo-map scanning) is offloaded to `worker_threads` to keep the UI responsive.
 
 ---
 
 ## Project structure
 
 ```
-electron/           main process: IPC domains (Zod), agent registry, git, worker parsing, terminal, updater, cloud runner
-src/                renderer: components (grouped by domain), store, hooks, api (IPC wrappers), i18n, theme
-pi-bridge/          AgentManager: session projection, tool policy, titles and cloud protocol contracts on top of pi-coding-agent
-packages/cloud-ui/  shared UI between desktop and cloud web (types, WS reducer, Paper & Ink primitives and cards)
+electron/           main process: typed IPC contract & Zod validation, agent host, MCP store, git, worker parsing, terminal, updater, cloud runner
+src/                renderer: components (10 domains), store (Zustand 5), hooks, api (IPC wrappers), theme
+pi-bridge/          Agent bridge: session projection, tool/approval policy, unified MCP host, titles and cloud protocol contracts
+packages/ui/        shared Paper & Ink UI primitives and streaming renderers for desktop and cloud web
+packages/i18n/      shared typed i18next Chinese/English catalogs and error localization
+packages/cloud-ui/  shared cloud UI between desktop and cloud web (task cards, memory, MCP manager, WS frame reducer)
 apps/cloud/         cloud agent service (Node 24 node:sqlite + dual WS + web console)
-tests/              Vitest suites (grouped by domain: agent / cloud / electron / git / ui / utils)
+tests/              Vitest suites (grouped by domain: agent / cloud / electron / git / ui / utils) + Playwright Electron smoke
 docs/               project documentation
 examples/           plugin examples (git-tools)
 ```
@@ -220,7 +226,7 @@ Process model, data flow and the IPC channel table: [PROJECT_STRUCTURE](docs/arc
 
 - **Report a bug**: include reproduction steps and the relevant slice of `logs/main.log` / `logs/agent.log` (keys never reach the logs).
 - **Send a PR**: run `npm run type-check` / `npm test` / `npm run lint` / `npm run build` first; UI changes must also pass `tests/ui/design-system.test.ts`.
-- **Translate**: UI strings live in `src/i18n/`; keep Chinese and English in sync.
+- **Translate**: UI strings live in `packages/i18n/`; keep Chinese and English in sync.
 - **Write a plugin**: start from [examples/plugins/git-tools](examples/plugins/git-tools); commands and hooks are documented in [PROJECT_STRUCTURE](docs/architecture/PROJECT_STRUCTURE.md).
 
 Rules for agents working on this repo: [AGENTS.md](AGENTS.md). Copy guidelines: [PUBLIC_COPY](docs/guides/PUBLIC_COPY.md).
