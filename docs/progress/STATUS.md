@@ -9,7 +9,7 @@
 
 | 项 | 值 |
 | --- | --- |
-| 版本 | **0.12.1**（2026-11-28） |
+| 版本 | **0.12.2**（2026-11-28） |
 | 阶段 | 本地 Agent 工作台与云端 Agent 完成 Phase A–F 全面升级：安全边界与云端 SQLite 关系化、性能/体积瘦身与后台休眠、6 大手写底层替换、Zustand 5 / `@pi-workbench/{ui,i18n,cloud-ui}` / 单源 Typed IPC / 上帝文件拆解 / 严格门禁与 Playwright E2E、`utilityProcess` 进程隔离与原生多 `BrowserWindow` 拆窗，以及全栈统一 MCP 服务器接入（桌面全局/项目级 SHA-256 信任 + 云端远程/本地 stdio 与双端共享管理 UI） |
 | 技术栈 | Electron 44 + React 19 + TypeScript 5.9 + Vite 5 + Zustand 5 + Tailwind 3 + Monaco 0.57 + Zod 4 + i18next + Playwright (`_electron`) |
 | Agent SDK | `@earendil-works/pi-coding-agent` 1.3.0（独立 Electron `utilityProcess` + 直连 `MessagePort` 流式；重 CPU 非 Agent 解析走 `worker_threads`） |
@@ -40,6 +40,7 @@
 
 - **v0.1 ~ v0.7.9**：本地 Agent 工作台——编辑器 / 会话与分支 / 终端 / Git 与工作树 / 阅读视图 / 面板拆窗 / 托盘常驻 / 自动更新与三平台发布。
 - **v0.8.0 ~ v0.9.1**：云端 Agent 的 Hermes 实现（配对、会话与 SSE、审批闭环、内嵌控制台、任务与媒体、云端工作区派活 H3），**已整体移除**（代码与文档都不在仓库里，需要考古看 `git log`）。
+- **0.12.2**：修复 Windows 历史 `/allusers`（`HKLM`）安装升级时 NSIS `$APPDATA` 误落 `C:\ProgramData\pi-workbench` 的问题（`build/installer.nsh` 全钩子显式切 `SetShellVarContext current` 并按 `$installMode` 恢复，顺手回收旧残留）；在 `customUnInstall` 升级分支补齐二次数据抢救纵深防御，并调整 `migrateLegacyInstallDirSync` 合并优先级（更新的 `installDir` 优先于暂存目录）。
 - **0.12.1**：紧急修复打包版启动缺失 `app.asar/node_modules/@pi-workbench/i18n` 问题；在 Windows NSIS 安装器 `customInit` 与 `migrateLegacyInstallDirSync` 中增加 `.pending-legacy-migration` 旧数据抢救逻辑（确保直接覆盖损坏的 `0.12.0` 零数据丢失）；将打包 E2E 隔离至仓库外 `os.tmpdir()` 执行，彻底杜绝父目录 `node_modules` 穿透。
 - **0.12.0**：严格两目录模型 + Windows 免安装便携 `.zip`（含 ≤0.11.2 旧数据无损迁移）；59 项全栈 Bug 修复；Phase A–E 架构升级（安全边界与自动缓存维护、云端 SQLite v3 关系化与记忆入库、Cloud Web 瘦身至 8.11 MiB + 中英切换、后台工作区休眠不中断 Agent、面板宽度持久化与错误 Toast 悬停暂停、6 大手写底层替换、Zustand 5 / `@pi-workbench/{ui,i18n,cloud-ui}` / 单源 Typed IPC / `eslint --max-warnings 0` / Playwright `_electron` 冒烟、Agent `utilityProcess` 进程隔离与原生多 `BrowserWindow` 拆窗）；Phase F 统一 MCP 接入（桌面全局加密 + 项目级 SHA-256 信任 + 派活工单继承 + 云端远程/本地 `stdio` MCP 与双端共享管理 UI）。
 - **0.11.2**：云端 Agent 全面进阶（P0 真派活闭环 + P1 全部落地：脱敏 diff 按需审查、多端已读同步与托盘角标、持久记忆压缩前抽取 / 梦境整理 / `AGENTS.md` 与 `SOUL.md` 双端可视化编辑、运行中工单直发追加指令、停滞看门狗与全站并发上限 8、改动清单 `attention` 分组与密钥位置告警、工单 worktree 独立 `pre-push` 守卫、离线期汇报汇总）；供应商设置接入独立 `models.dev` 富数据与目录自动刷新 / `PI_OFFLINE` 开关，修复 Google / xAI 无效 Key 400 误判；补齐压缩进行中状态与压缩期排队、上下文覆写同步已有会话与高并发派单竞态修复。
@@ -50,4 +51,4 @@
 ---
 
 **维护者**: Pi Workbench Team
-**最后更新**: 2026-11-28（0.12.1 发版）
+**最后更新**: 2026-11-28（0.12.2 发版）

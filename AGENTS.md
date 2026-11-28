@@ -4,7 +4,7 @@
 
 **一句话**：本地优先的 Agent 原生开发工作台 —— Electron 桌面应用，Pi Agent 跑在主进程里，直接读写工作区、执行命令。
 **栈**：Electron 44 + React 19 + TypeScript 5.9 + Vite 5 + Zustand 5 + Tailwind 3 + Monaco 0.57 + Zod 4 + i18next + Playwright (`_electron`)。**Node ≥ 24**（`node:sqlite`、构建脚本依赖）。
-**阶段**：本地 Agent 工作台（0.12.1）+ 云端 Agent（Pi 内核），已完成安全止血、性能瘦身、Phase A–F 架构升级与统一 MCP 接入（快照见 [STATUS](docs/progress/STATUS.md)，待办见 [BACKLOG](docs/progress/BACKLOG.md)）。
+**阶段**：本地 Agent 工作台（0.12.2）+ 云端 Agent（Pi 内核），已完成安全止血、性能瘦身、Phase A–F 架构升级与统一 MCP 接入（快照见 [STATUS](docs/progress/STATUS.md)，待办见 [BACKLOG](docs/progress/BACKLOG.md)）。
 
 ---
 

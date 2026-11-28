@@ -173,7 +173,7 @@ Open **Settings → Providers** on first run and complete three steps:
 
 | Item            | State                                                                                                                                                         |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Current version | `0.12.1` (2026-11-28)                                                                                                                                         |
+| Current version | `0.12.2` (2026-11-28)                                                                                                                                         |
 | Releases        | Installers, Windows Portable `.zip` and `latest*.yml` produced by CI on version tags                                                                          |
 | Phases          | Local Agent workbench & Pi-kernel Cloud Agent live; `utilityProcess` isolation, native multi-window detach, unified MCP, and strict two-folder layout shipped |
 | Quality         | 9-tsconfig type-check + `eslint --max-warnings 0` + 2,090+ Vitest cases + full `build` / `build:cloud` + Playwright Electron smoke E2E                        |
