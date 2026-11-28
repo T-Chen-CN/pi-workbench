@@ -28,6 +28,8 @@
 | V-01 | macOS 手动验收（universal dmg） | 发布前 | ⬜ 未做 |
 | V-02 | Linux 手动验收（AppImage） | 发布前 | ⬜ 未做 |
 
+**2026-11-28 发版不阻塞记录（0.12.1 桌面端）**：同 0.12.0（热修复打包版 `@pi-workbench/i18n` 启动缺失与 NSIS 覆盖迁移抢救，未变更待办范围）：P-03 · P-02 · S-01 · D-02 · V-01 / V-02。
+
 **2026-11-28 发版不阻塞记录（0.12.0 桌面端）**：P-03（供应商预设 8 家 API Key + 4 条 OAuth 真实凭证手工验收，待真账号逐项补测）· P-02（云端 OAuth，P2，云端继续使用 API Key）· S-01（仓库 `.pi/extensions` 信任弹窗，P2，当前默认 `projectTrusted: false` 安全关闭）· D-02（托管工作树目录位置，P2，保持 `.pi-workbench/worktrees/`）· V-01 / V-02（macOS dmg / Linux AppImage 真机手动验收，依赖对应平台真机）。
 
 **2026-11-26 发版不阻塞记录（0.11.2 桌面端）**：P-03（供应商预设 8 家 API Key + 4 条 OAuth 真实凭证手工验收，待真机/真实账号逐项补测）· P-02（云端 OAuth，P2，云端继续使用 API Key）· V-01 / V-02（macOS dmg / Linux AppImage 真机手动验收，依赖对应平台真机）。
