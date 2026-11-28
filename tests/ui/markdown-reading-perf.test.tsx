@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, render } from '@testing-library/react'
+import { act, cleanup, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { OpenFile } from '../../src/types'
 
@@ -10,7 +10,11 @@ import type { OpenFile } from '../../src/types'
 const { MarkdownBody } = await import('../../src/components/chat/AgentMarkdown')
 const { getShikiInitCount, piShikiCodePlugin } = await import('../../src/utils/shikiHighlighter')
 
-afterEach(() => {
+afterEach(async () => {
+  cleanup()
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
   vi.clearAllMocks()
 })
 
