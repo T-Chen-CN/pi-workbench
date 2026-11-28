@@ -8,8 +8,11 @@
 *.ts text eol=lf
 *.tsx text eol=lf
 *.cts text eol=lf
+*.mts text eol=lf
 *.js text eol=lf
 *.jsx text eol=lf
+*.mjs text eol=lf
+*.cjs text eol=lf
 *.json text eol=lf
 *.md text eol=lf
 *.yml text eol=lf
@@ -18,8 +21,10 @@
 *.css text eol=lf
 *.scss text eol=lf
 
-# Shell 脚本 - 必须使用 LF
+# Shell 脚本与 Linux 服务单元 - 必须使用 LF
 *.sh text eol=lf
+*.service text eol=lf
+*.timer text eol=lf
 
 # Windows 批处理文件 - 使用 CRLF
 *.bat text eol=crlf

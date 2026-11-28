@@ -43,6 +43,9 @@ jobs:
           cache: npm
 
       - run: npm ci
+      - run: npm run build:i18n
+      - run: npm run build:bridge
+      - run: npm run build:cloud
       - run: npm test
       - run: npm run build
       - run: npx electron-builder --win --dir --publish never
