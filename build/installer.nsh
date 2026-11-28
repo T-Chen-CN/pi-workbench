@@ -8,6 +8,8 @@
 !define PI_USER_DATA "$APPDATA\pi-workbench"
 !define PI_DIFFERENTIAL_BASE "${PI_USER_DATA}\cache\pi-workbench-updater"
 !define PI_UPDATE_FLAG "${PI_USER_DATA}\cache\pi-workbench-updater.flag"
+!define PI_MIGRATION_MARKER "${PI_USER_DATA}\config\.migrated-from-install-dir"
+!define PI_PENDING_LEGACY_MIGRATION "${PI_USER_DATA}\.pending-legacy-migration"
 # electron-builder 默认在 LOCALAPPDATA 留下的差分副本与旧版外部缓存，统一清掉避免多出第 3 个目录
 !define PI_LEGACY_UPDATER_STORE "$LOCALAPPDATA\pi-workbench-updater"
 !define PI_LEGACY_UPDATE_CACHE "$LOCALAPPDATA\Pi-Workbench-Update"
@@ -74,6 +76,35 @@ LangString PW_KEEP_DATA_CHECKBOX 2052 "保留用户配置与会话数据（%APPD
       RMDir /r "${PI_USER_DATA}"
     ${endIf}
   ${endIf}
+!macroend
+
+!macro customInit
+  # 必须在旧卸载器清理 $INSTDIR 之前，先抢救仍留在安装目录内的旧版（<=0.11.2 或未完成迁移的 0.12.0）数据到暂存目录，
+  # 由新版本首次启动的 migrateLegacyInstallDirSync 合并进 %APPDATA%\pi-workbench 后清理。
+  ${If} "$INSTDIR" != ""
+  ${AndIfNot} ${FileExists} "$INSTDIR\portable"
+  ${AndIfNot} ${FileExists} "${PI_MIGRATION_MARKER}"
+    ${If} ${FileExists} "$INSTDIR\config\*.*"
+    ${OrIf} ${FileExists} "$INSTDIR\data\*.*"
+      CreateDirectory "${PI_PENDING_LEGACY_MIGRATION}"
+      ${If} ${FileExists} "$INSTDIR\config\*.*"
+        CreateDirectory "${PI_PENDING_LEGACY_MIGRATION}\config"
+        CopyFiles /SILENT "$INSTDIR\config\*.*" "${PI_PENDING_LEGACY_MIGRATION}\config"
+      ${EndIf}
+      ${If} ${FileExists} "$INSTDIR\data\*.*"
+        CreateDirectory "${PI_PENDING_LEGACY_MIGRATION}\data"
+        CopyFiles /SILENT "$INSTDIR\data\*.*" "${PI_PENDING_LEGACY_MIGRATION}\data"
+      ${EndIf}
+      ${If} ${FileExists} "$INSTDIR\logs\*.*"
+        CreateDirectory "${PI_PENDING_LEGACY_MIGRATION}\logs"
+        CopyFiles /SILENT "$INSTDIR\logs\*.*" "${PI_PENDING_LEGACY_MIGRATION}\logs"
+      ${EndIf}
+      ${If} ${FileExists} "$INSTDIR\cache\drafts\*.*"
+        CreateDirectory "${PI_PENDING_LEGACY_MIGRATION}\cache\drafts"
+        CopyFiles /SILENT "$INSTDIR\cache\drafts\*.*" "${PI_PENDING_LEGACY_MIGRATION}\cache\drafts"
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
 !macroend
 
 !macro customInstall

@@ -54,9 +54,21 @@ async function main() {
   }
   delete launchEnv.VITE_DEV_SERVER_URL
 
-  const launchOptions = packagedExe
+  // 打包产物必须复制到仓库外部的临时目录运行，避免 Node ESM 沿父目录向上解析到仓库根 node_modules 掩盖漏打包依赖
+  let isolatedAppDir = null
+  let effectivePackagedExe = packagedExe
+  if (packagedExe) {
+    const resolvedExe = path.resolve(packagedExe)
+    const sourceAppDir = path.dirname(resolvedExe)
+    isolatedAppDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-e2e-app-'))
+    fs.cpSync(sourceAppDir, isolatedAppDir, { recursive: true })
+    effectivePackagedExe = path.join(isolatedAppDir, path.basename(resolvedExe))
+  }
+
+  const launchOptions = effectivePackagedExe
     ? {
-        executablePath: packagedExe,
+        executablePath: effectivePackagedExe,
+        cwd: isolatedAppDir,
         args: [`--data-dir=${tempDataDir}`, '--no-sandbox'],
         env: launchEnv,
         timeout: 45_000,
@@ -72,7 +84,7 @@ async function main() {
 
   try {
     console.log(
-      `[E2E Smoke] Launching ${packagedExe ? `packaged executable (${packagedExe})` : 'built Electron app'}...`
+      `[E2E Smoke] Launching ${effectivePackagedExe ? `isolated packaged executable (${effectivePackagedExe})` : 'built Electron app'}...`
     )
     electronApp = await electron.launch(launchOptions)
 
@@ -352,6 +364,9 @@ async function main() {
     await new Promise((resolve) => setTimeout(resolve, 300))
     fs.rmSync(tempWorkspace, { recursive: true, force: true })
     fs.rmSync(tempDataDir, { recursive: true, force: true })
+    if (isolatedAppDir) {
+      fs.rmSync(isolatedAppDir, { recursive: true, force: true })
+    }
   }
 }
 

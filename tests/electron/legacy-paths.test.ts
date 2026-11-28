@@ -100,6 +100,36 @@ describe('migrateLegacyInstallDirSync（旧便携安装目录 → 标准数据�
       }).reason
     ).toBe('no-legacy-data')
   })
+
+  it('merges NSIS customInit staged .pending-legacy-migration directory and cleans it up afterwards', () => {
+    const installDir = makeTempDir()
+    const dataDir = makeTempDir()
+    const stagedDir = path.join(dataDir, '.pending-legacy-migration')
+    fs.mkdirSync(path.join(stagedDir, 'config'), { recursive: true })
+    fs.mkdirSync(path.join(stagedDir, 'data', 'agent', 'sessions'), { recursive: true })
+    fs.mkdirSync(path.join(stagedDir, 'cache', 'drafts'), { recursive: true })
+    fs.writeFileSync(path.join(stagedDir, 'config', 'credentials.json'), '{"key":"enc:abc"}')
+    fs.writeFileSync(path.join(stagedDir, 'data', 'workspaces.db'), 'db-bytes')
+    fs.writeFileSync(path.join(stagedDir, 'data', 'agent', 'sessions', 's2.jsonl'), '{}')
+    fs.writeFileSync(path.join(stagedDir, 'cache', 'drafts', 'd2.json'), '{}')
+
+    // 模拟旧版卸载器已清理 installDir，仅剩安装器提前暂存到 dataDir/.pending-legacy-migration 的数据
+    const result = migrateLegacyInstallDirSync({
+      installDir,
+      dataDir,
+      logger: silentLogger,
+    })
+
+    expect(result.needed).toBe(true)
+    expect(result.migratedFiles).toBe(4)
+    expect(fs.readFileSync(path.join(dataDir, 'config', 'credentials.json'), 'utf8')).toBe(
+      '{"key":"enc:abc"}'
+    )
+    expect(fs.readFileSync(path.join(dataDir, 'data', 'workspaces.db'), 'utf8')).toBe('db-bytes')
+    expect(fs.readFileSync(path.join(dataDir, 'cache', 'drafts', 'd2.json'), 'utf8')).toBe('{}')
+    expect(fs.existsSync(path.join(dataDir, 'config', '.migrated-from-install-dir'))).toBe(true)
+    expect(fs.existsSync(stagedDir)).toBe(false)
+  })
 })
 
 describe('migratePiAgentHome', () => {

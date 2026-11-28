@@ -162,6 +162,16 @@ describe('Pi SDK directories', () => {
     expect(process.env.PI_CODING_AGENT_DIR).toBe(piAgentDir)
     expect(process.env.PI_CODING_AGENT_SESSION_DIR).toBe(path.join(piAgentDir, 'sessions'))
   })
+
+  it('主进程直接导入的内部 workspace 包必须声明在根 package.json dependencies 中，确保打进 app.asar/node_modules', async () => {
+    const fs = await import('node:fs')
+    const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '../..')
+    const rootPkg = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>
+    }
+    expect(rootPkg.dependencies?.['@pi-workbench/i18n']).toBeTruthy()
+    expect(rootPkg.dependencies?.['pi-bridge']).toBeTruthy()
+  })
 })
 
 describe('resolveAppPaths 无参生产调用缓存', () => {

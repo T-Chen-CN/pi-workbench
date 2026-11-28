@@ -32,6 +32,7 @@ export interface LegacyInstallMigrationResult {
 }
 
 const INSTALL_MIGRATION_MARKER = path.join('config', '.migrated-from-install-dir')
+const PENDING_LEGACY_MIGRATION_DIR = '.pending-legacy-migration'
 const CHROMIUM_LOCK_FILES = new Set([
   'SingletonLock',
   'SingletonSocket',
@@ -40,7 +41,7 @@ const CHROMIUM_LOCK_FILES = new Set([
 ])
 
 /**
- * 同步迁移旧版本（<=0.11.2）留在程序安装目录内的用户数据到标准数据目录。
+ * 同步迁移旧版本（<=0.11.2）留在程序安装目录内或由安装器提前暂存的用户数据到标准数据目录。
  * 必须在主进程建立日志、setPath('userData')、打开 workspaces.db 之前调用，
  * 否则新目录会先建出空库和默认配置。
  */
@@ -68,9 +69,14 @@ export function migrateLegacyInstallDirSync(
     return result
   }
 
-  const hasLegacyConfig = isDirectorySync(path.join(installDir, 'config'))
-  const hasLegacyData = isDirectorySync(path.join(installDir, 'data'))
-  if (!hasLegacyConfig && !hasLegacyData) {
+  const stagedDir = path.join(dataDir, PENDING_LEGACY_MIGRATION_DIR)
+  const hasStagedData =
+    isDirectorySync(path.join(stagedDir, 'config')) ||
+    isDirectorySync(path.join(stagedDir, 'data'))
+  const hasLegacyInstallData =
+    isDirectorySync(path.join(installDir, 'config')) ||
+    isDirectorySync(path.join(installDir, 'data'))
+  if (!hasStagedData && !hasLegacyInstallData) {
     result.reason = 'no-legacy-data'
     return result
   }
@@ -106,12 +112,18 @@ export function migrateLegacyInstallDirSync(
   }
 
   const subtrees = ['config', 'data', 'logs', path.join('cache', 'drafts')]
-  for (const subtree of subtrees) {
-    try {
-      copyTreeNoOverwrite(path.join(installDir, subtree), path.join(dataDir, subtree))
-    } catch (error) {
-      hadError = true
-      logger.warn('[Legacy] Failed to scan legacy install-dir subtree:', subtree, error)
+  const sources: string[] = []
+  if (hasStagedData) sources.push(stagedDir)
+  if (hasLegacyInstallData) sources.push(installDir)
+
+  for (const sourceBase of sources) {
+    for (const subtree of subtrees) {
+      try {
+        copyTreeNoOverwrite(path.join(sourceBase, subtree), path.join(dataDir, subtree))
+      } catch (error) {
+        hadError = true
+        logger.warn('[Legacy] Failed to scan legacy install-dir subtree:', subtree, error)
+      }
     }
   }
 
@@ -126,7 +138,7 @@ export function migrateLegacyInstallDirSync(
       markerPath,
       JSON.stringify(
         {
-          from: installDir,
+          from: hasStagedData ? stagedDir : installDir,
           migratedAt: new Date().toISOString(),
           migratedFiles: result.migratedFiles,
           skippedFiles: result.skippedFiles,
@@ -140,6 +152,15 @@ export function migrateLegacyInstallDirSync(
     logger.warn('[Legacy] Failed to write install-dir migration marker:', error)
     result.reason = 'marker-write-failed'
     return result
+  }
+
+  // 合并完成后清理安装器暂存目录
+  if (hasStagedData) {
+    try {
+      fs.rmSync(stagedDir, { recursive: true, force: true })
+    } catch (error) {
+      logger.warn('[Legacy] Could not remove staged legacy migration directory:', stagedDir, error)
+    }
   }
 
   // 尽力把旧安装目录内的数据目录归档到 .legacy-data-backup，便于用户回退或后续卸载清理；
@@ -162,7 +183,7 @@ export function migrateLegacyInstallDirSync(
   }
   result.archivedLegacy = archivedAny
   logger.info('[Legacy] Migrated legacy install-dir data to standard data directory:', {
-    from: installDir,
+    from: hasStagedData ? stagedDir : installDir,
     to: dataDir,
     migratedFiles: result.migratedFiles,
     skippedFiles: result.skippedFiles,
